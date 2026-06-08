@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.env
+
+# Node / web
+web/node_modules/
+web/dist/
+
+# Data / scratch
+*.fits
+*.fit
+data/

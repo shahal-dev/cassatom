@@ -1,0 +1,22 @@
+# Virtual (simulator) site — Phase 0.
+# Swapping to the real EQ6-R + ToupTek rig means editing `indi_device` names here
+# (Telescope Simulator -> EQMod Mount, CCD Simulator -> Toupcam ...) and pointing
+# `indi.host` at the edge node. No code change. See docs/plan/02-DEVICE-CONTROL.md.
+
+site:
+  id: virtual
+  name: Virtual Test Site
+
+indi:
+  host: localhost
+  port: 7624
+
+devices:
+  - id: vmount
+    role: mount
+    adapter: indi
+    indi_device: "Telescope Simulator"   # real: "EQMod Mount"
+  - id: vcam
+    role: camera
+    adapter: indi
+    indi_device: "CCD Simulator"         # real: e.g. "Toupcam Minicam8"

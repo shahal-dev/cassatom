@@ -1,0 +1,48 @@
+name: cassa-phase0
+
+services:
+  # Phase-0 essential: the INDI virtual site (simulator drivers on 7624).
+  indi-sim:
+    build:
+      context: .
+      dockerfile: indi-sim.Dockerfile
+    image: cassa/indi-sim:latest
+    ports:
+      - "7624:7624"
+    restart: unless-stopped
+
+  # --- Infrastructure for later phases. Start with: docker compose --profile infra up -d
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    profiles: ["infra"]
+    environment:
+      POSTGRES_USER: cassa
+      POSTGRES_PASSWORD: cassa
+      POSTGRES_DB: cassa
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis:7
+    profiles: ["infra"]
+    ports: ["6379:6379"]
+
+  nats:
+    image: nats:2
+    profiles: ["infra"]
+    command: ["-js"]   # enable JetStream
+    ports: ["4222:4222"]
+
+  minio:
+    image: minio/minio
+    profiles: ["infra"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: cassa
+      MINIO_ROOT_PASSWORD: cassa-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["miniodata:/data"]
+
+volumes:
+  pgdata:
+  miniodata:

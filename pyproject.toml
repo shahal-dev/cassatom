@@ -1,0 +1,22 @@
+[project]
+name = "cassa"
+version = "0.0.1"
+description = "CASSA — multi-site telescope/dome control system (Phase 0)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "astropy>=6.0",
+    "pillow>=10.2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cassa*"]
