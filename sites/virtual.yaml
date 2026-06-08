@@ -1,7 +1,8 @@
-# Virtual (simulator) site — Phases 0–1.
-# Swapping to the real EQ6-R + ToupTek rig means editing `indi_device` names here
-# (Telescope Simulator -> EQMod Mount, CCD Simulator -> Toupcam ...) and pointing
-# `indi.host` at the edge node. No code change. See docs/plan/02-DEVICE-CONTROL.md.
+# Virtual (simulator) site.
+# NOTE: device role bindings are now chosen at runtime from the web console (Devices
+# panel) and persisted to data/bindings.json — this file only provides defaults for
+# the site id and the INDI server host/port. The `devices` list below is informational
+# (it documents the expected sim devices). See docs/plan/02-DEVICE-CONTROL.md.
 
 site:
   id: virtual

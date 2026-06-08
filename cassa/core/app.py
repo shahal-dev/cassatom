@@ -60,6 +60,21 @@ class FilterReq(BaseModel):
     slot: int = Field(ge=1, le=64)
 
 
+class BindReq(BaseModel):
+    role: str = Field(pattern="^(mount|camera|focuser|filter)$")
+    device: str
+    params: Optional[dict] = None  # e.g. {"DEVICE_PORT": {"PORT": "/dev/ttyUSB0"}}
+
+
+class UnbindReq(BaseModel):
+    role: str = Field(pattern="^(mount|camera|focuser|filter)$")
+
+
+class ServerReq(BaseModel):
+    host: str
+    port: int = Field(gt=0, le=65535)
+
+
 async def _broadcaster(app: FastAPI) -> None:
     period = 1.0 / _TELEMETRY_HZ
     while True:
@@ -146,6 +161,39 @@ async def health():
 @app.get("/api/status")
 async def status():
     return app.state.dm.snapshot()
+
+
+# ---------------------------------------------------------- connection mgmt
+@app.get("/api/indi/devices")
+async def indi_devices():
+    return app.state.dm.list_devices()
+
+
+@app.post("/api/indi/server")
+async def indi_server(req: ServerReq):
+    await app.state.dm.set_server(req.host, req.port)
+    return {"ok": True, "host": req.host, "port": req.port}
+
+
+@app.post("/api/devices/bind")
+async def bind_device(req: BindReq):
+    try:
+        return await app.state.dm.bind(req.role, req.device, req.params)
+    except (TimeoutError, RuntimeError, ValueError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/devices/unbind")
+async def unbind_device(req: UnbindReq):
+    await app.state.dm.unbind(req.role)
+    return {"ok": True}
+
+
+@app.post("/api/devices/autodetect")
+async def autodetect_devices():
+    if not app.state.dm.connected:
+        raise HTTPException(503, "INDI server not connected")
+    return {"bound": await app.state.dm.autodetect()}
 
 
 # ---------------------------------------------------------------------- mount

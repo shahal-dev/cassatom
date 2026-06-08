@@ -70,12 +70,27 @@ cd web && npm install
 npm run dev               # http://localhost:5173
 ```
 
-Open **http://localhost:5173**. You should see `live` + `INDI connected`. Enter an
-RA/Dec (defaults point near Orion's Belt), click **Slew** and watch RA/Dec converge;
-set an exposure and click **Expose** to get a simulated frame.
+Open **http://localhost:5173**. You should see `INDI connected`.
 
-> Order doesn't matter — the backend retries the INDI connection, and the console
+**Connect your devices from the console** (no YAML editing):
+1. In the **Devices** panel, click **Scan** to list whatever the INDI server exposes.
+2. Click **Auto-detect & connect all** — each device binds to its role (mount,
+   camera, focuser, filter). Or assign roles manually and click **Connect**.
+3. For a **real serial mount** (EQ6-R via EQDIR), type the port (e.g. `/dev/ttyUSB0`)
+   in its row before connecting.
+4. To point CASSA at a **remote edge node**, set the INDI host/port and click
+   **Connect server**.
+
+Your choices persist to `data/bindings.json` and reconnect automatically on restart.
+Once bound, the Mount/Camera/Focuser panels go live: slew, capture, and archive.
+
+> Order doesn't matter — the backend retries the INDI connection and the console
 > reconnects the WebSocket automatically.
+
+### Moving to real hardware
+Run `indiserver` with the real drivers instead of the simulators
+(`indiserver -v indi_eqmod indi_toupbase`), then **Scan → assign → Connect** in the
+Devices panel. Same UI, real telescope — no code or config-file change.
 
 ## Quick API check (no browser)
 ```bash

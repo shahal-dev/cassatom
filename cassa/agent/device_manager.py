@@ -1,15 +1,18 @@
-"""Device Manager: holds the INDI connection and the site's devices.
+"""Device Manager: INDI transport + runtime, UI-driven device bindings.
 
-Keeps a resilient background connection to ``indiserver``: if the server is not yet
-up (or drops), it retries. Mount + camera are required; focuser + filter wheel are
-optional (tolerated if a site lacks them). ``capture()`` orchestrates a full manual
-exposure and authors a provenance-rich FITS frame.
+The INDI *transport* (connection to ``indiserver``) auto-connects and retries. Which
+discovered device fills each *role* (mount/camera/focuser/filter) is decided at
+runtime from the frontend and persisted to ``bindings.json`` — no hardcoded device
+names. This is how CASSA moves from the simulator to real hardware without code or
+even YAML edits: pick the real devices in the console.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
+import pathlib
 from datetime import datetime, timezone
 
 from .. import __version__
@@ -21,11 +24,24 @@ log = logging.getLogger("cassa.agent")
 
 _RECONNECT_DELAY = 2.0
 
+# role -> attribute on this manager
+ROLE_ATTR = {"mount": "mount", "camera": "camera", "focuser": "focuser", "filter": "filterwheel"}
+
+# INDI DRIVER_INTERFACE bitmask -> roles we care about
+_IFACE_ROLES = [(1, "mount"), (2, "camera"), (4, "camera"), (8, "focuser"), (16, "filter")]
+
+
+def _roles_for(iface: int) -> list[str]:
+    roles: list[str] = []
+    for bit, role in _IFACE_ROLES:
+        if iface & bit and role not in roles:
+            roles.append(role)
+    return roles
+
 
 class DeviceManager:
     def __init__(self, settings):
         self.settings = settings
-        self.client = INDIClient(settings.indi_host, settings.indi_port)
         self.mount: IndiMount | None = None
         self.camera: IndiCamera | None = None
         self.focuser: IndiFocuser | None = None
@@ -33,9 +49,32 @@ class DeviceManager:
         self.connected = False
         self.latest_png: bytes | None = None
         self.latest_image_at: str | None = None
+        self._bindings: dict[str, dict] = {}
+        self._server = {"host": settings.indi_host, "port": settings.indi_port}
+        self._load_bindings()
+        self.client = INDIClient(self._server["host"], self._server["port"])
         self._stop = False
         self._task: asyncio.Task | None = None
 
+    # ------------------------------------------------------------ persistence
+    def _load_bindings(self) -> None:
+        path = pathlib.Path(self.settings.bindings_path)
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text())
+            self._server.update(data.get("server", {}))
+            self._bindings = data.get("bindings", {})
+            log.info("loaded %d device binding(s) from %s", len(self._bindings), path)
+        except Exception:
+            log.exception("could not read bindings file %s", path)
+
+    def _save_bindings(self) -> None:
+        path = pathlib.Path(self.settings.bindings_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"server": self._server, "bindings": self._bindings}, indent=2))
+
+    # ------------------------------------------------------------- lifecycle
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run())
 
@@ -53,15 +92,14 @@ class DeviceManager:
         while not self._stop:
             try:
                 await self.client.connect()
-                await self._setup()
                 self.connected = True
-                log.info("site online (mount=%s, camera=%s)",
-                         self.settings.mount_device, self.settings.camera_device)
+                log.info("INDI transport up (%s:%s)", self._server["host"], self._server["port"])
+                await self._rebind_all()
                 await self.client.wait_closed()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                log.warning("INDI connection problem: %s", e)
+                log.warning("INDI transport problem: %s", e)
             finally:
                 self.connected = False
                 self.mount = self.camera = self.focuser = self.filterwheel = None
@@ -69,35 +107,113 @@ class DeviceManager:
                 break
             await asyncio.sleep(_RECONNECT_DELAY)
 
-    async def _setup(self) -> None:
-        s = self.settings
-        self.mount = IndiMount(self.client, s.mount_device)
-        self.camera = IndiCamera(self.client, s.camera_device, on_image=self._on_image)
-        await self.mount.connect()
-        await self.camera.connect()
-        # optional devices — a site may not have them
-        try:
-            f = IndiFocuser(self.client, s.focuser_device)
-            await f.connect(timeout=8.0)
-            self.focuser = f
-        except Exception as e:
-            log.info("no focuser (%s): %s", s.focuser_device, e)
-        try:
-            w = IndiFilterWheel(self.client, s.filterwheel_device)
-            await w.connect(timeout=8.0)
-            self.filterwheel = w
-        except Exception as e:
-            log.info("no filter wheel (%s): %s", s.filterwheel_device, e)
+    async def set_server(self, host: str, port: int) -> None:
+        """Repoint the INDI transport (e.g. at a remote edge node) and reconnect."""
+        self._server = {"host": host, "port": int(port)}
+        self._save_bindings()
+        old = self.client
+        self.client = INDIClient(host, int(port))  # next _run iteration uses this
+        await old.close()  # unblocks wait_closed -> loop reconnects with the new client
 
+    # --------------------------------------------------------------- binding
+    def _make_adapter(self, role: str, device: str):
+        if role == "mount":
+            return IndiMount(self.client, device)
+        if role == "camera":
+            return IndiCamera(self.client, device, on_image=self._on_image)
+        if role == "focuser":
+            return IndiFocuser(self.client, device)
+        if role == "filter":
+            return IndiFilterWheel(self.client, device)
+        raise ValueError(f"unknown role {role!r}")
+
+    async def _bind_internal(self, role: str, device: str, params: dict | None) -> None:
+        if not await self.client.wait_for(lambda: self.client.has_prop(device, "CONNECTION"), 15):
+            raise TimeoutError(f"device {device!r} is not present on the INDI server")
+        if params:  # e.g. {"DEVICE_PORT": {"PORT": "/dev/ttyUSB0"}}
+            for prop, elems in params.items():
+                await self.client.set_property(device, prop, elems)
+        adapter = self._make_adapter(role, device)
+        await adapter.connect()
+        setattr(self, ROLE_ATTR[role], adapter)
+        log.info("bound %s -> %s", role, device)
+
+    async def _rebind_all(self) -> None:
+        for role, b in list(self._bindings.items()):
+            try:
+                await self._bind_internal(role, b["device"], b.get("params"))
+            except Exception as e:
+                log.warning("could not restore %s -> %s: %s", role, b.get("device"), e)
+
+    async def bind(self, role: str, device: str, params: dict | None = None) -> dict:
+        if role not in ROLE_ATTR:
+            raise ValueError(f"unknown role {role!r}")
+        if not self.connected:
+            raise RuntimeError("INDI server not connected")
+        await self._bind_internal(role, device, params or {})
+        self._bindings[role] = {"device": device, "params": params or {}}
+        self._save_bindings()
+        return {"role": role, "device": device}
+
+    async def unbind(self, role: str) -> None:
+        if role not in ROLE_ATTR:
+            raise ValueError(f"unknown role {role!r}")
+        adapter = getattr(self, ROLE_ATTR[role])
+        if adapter is not None:
+            try:
+                await self.client.set_switch(
+                    adapter.device, "CONNECTION", {"CONNECT": False, "DISCONNECT": True}
+                )
+            except Exception:
+                log.debug("disconnect of %s failed", role, exc_info=True)
+        setattr(self, ROLE_ATTR[role], None)
+        self._bindings.pop(role, None)
+        self._save_bindings()
+
+    async def autodetect(self) -> list[dict]:
+        """Bind each unassigned discovered device to its primary interface role."""
+        bound = []
+        for d in self.list_devices():
+            if d["bound_as"]:
+                continue
+            for role in d["roles"]:
+                if getattr(self, ROLE_ATTR[role]) is None:
+                    try:
+                        await self.bind(role, d["device"])
+                        bound.append({"role": role, "device": d["device"]})
+                        break
+                    except Exception as e:
+                        log.warning("autodetect %s -> %s failed: %s", role, d["device"], e)
+        return bound
+
+    # ------------------------------------------------------------- discovery
+    def list_devices(self) -> list[dict]:
+        out = []
+        for dev in self.client.device_names():
+            iface_str = self.client.element(dev, "DRIVER_INFO", "DRIVER_INTERFACE")
+            try:
+                iface = int(iface_str) if iface_str is not None else 0
+            except (TypeError, ValueError):
+                iface = 0
+            out.append({
+                "device": dev,
+                "roles": _roles_for(iface),
+                "connected": bool(self.client.element(dev, "CONNECTION", "CONNECT", False)),
+                "bound_as": next((r for r, b in self._bindings.items() if b["device"] == dev), None),
+                "has_port": self.client.has_prop(dev, "DEVICE_PORT"),
+                "port": self.client.element(dev, "DEVICE_PORT", "PORT"),
+            })
+        return out
+
+    # --------------------------------------------------------------- imaging
     def _on_image(self, png: bytes) -> None:
         self.latest_png = png
         self.latest_image_at = datetime.now(timezone.utc).isoformat()
 
     async def capture(self, seconds: float, image_type: str = "LIGHT",
                       object_name: str = "", filter_slot: int | None = None) -> dict:
-        """Run a full manual exposure and return an authored FITS + metadata."""
         if not (self.connected and self.mount and self.camera):
-            raise RuntimeError("devices not connected")
+            raise RuntimeError("mount and camera must be connected to capture")
 
         if filter_slot and self.filterwheel:
             await self.filterwheel.set_position(int(filter_slot))
@@ -128,8 +244,8 @@ class DeviceManager:
             "image_type": image_type,
             "object_name": object_name,
             "observer": self.settings.observer,
-            "telescope": self.settings.telescope_name,
-            "instrument": self.settings.instrument_name,
+            "telescope": self.mount.device if self.mount else self.settings.telescope_name,
+            "instrument": self.camera.device if self.camera else self.settings.instrument_name,
             "version": __version__,
             "ra_deg": ra_deg,
             "dec_deg": mst.dec_deg,
@@ -141,14 +257,17 @@ class DeviceManager:
         }
         return author_fits(raw, ctx)
 
+    # -------------------------------------------------------------- snapshot
     def snapshot(self) -> dict:
-        ready = self.connected and self.mount is not None and self.camera is not None
+        on = self.connected
         return {
             "ts": datetime.now(timezone.utc).isoformat(),
-            "indi_connected": self.connected,
+            "indi_connected": on,
+            "server": dict(self._server),
             "last_image_at": self.latest_image_at,
-            "mount": self.mount.status().dict() if ready else None,
-            "camera": self.camera.status().dict() if ready else None,
-            "focuser": self.focuser.status().dict() if (ready and self.focuser) else None,
-            "filter": self.filterwheel.status().dict() if (ready and self.filterwheel) else None,
+            "mount": self.mount.status().dict() if (on and self.mount) else None,
+            "camera": self.camera.status().dict() if (on and self.camera) else None,
+            "focuser": self.focuser.status().dict() if (on and self.focuser) else None,
+            "filter": self.filterwheel.status().dict() if (on and self.filterwheel) else None,
+            "bindings": {role: self._bindings.get(role, {}).get("device") for role in ROLE_ATTR},
         }

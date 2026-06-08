@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     db_url: str = "sqlite+aiosqlite:///data/cassa.db"
     data_dir: str = "data/store"
 
+    # runtime device bindings (role -> device) chosen from the UI, persisted here
+    bindings_path: str = "data/bindings.json"
+
     model_config = SettingsConfigDict(env_prefix="CASSA_", env_file=".env", extra="ignore")
 
 

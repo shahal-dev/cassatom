@@ -205,6 +205,25 @@ class INDIClient:
         parts.append("</newSwitchVector>")
         await self._send("".join(parts))
 
+    async def set_text(self, device: str, name: str, elements: dict[str, str]) -> None:
+        parts = [f'<newTextVector device="{device}" name="{name}">']
+        parts += [f'<oneText name="{k}">{v}</oneText>' for k, v in elements.items()]
+        parts.append("</newTextVector>")
+        await self._send("".join(parts))
+
+    async def set_property(self, device: str, name: str, elements: dict) -> None:
+        """Set a property without the caller knowing its type (Number/Switch/Text)."""
+        try:
+            ptype = self._state[device][name]["type"]
+        except KeyError:
+            ptype = "Text"
+        if ptype == "Number":
+            await self.set_number(device, name, {k: float(v) for k, v in elements.items()})
+        elif ptype == "Switch":
+            await self.set_switch(device, name, {k: bool(v) for k, v in elements.items()})
+        else:
+            await self.set_text(device, name, {k: str(v) for k, v in elements.items()})
+
     async def enable_blob(self, device: str, mode: str = "Also") -> None:
         # Never | Also | Only. BLOBs are not delivered to a client until enabled.
         await self._send(f'<enableBLOB device="{device}">{mode}</enableBLOB>')
@@ -227,6 +246,9 @@ class INDIClient:
 
     def has_prop(self, device: str, prop: str) -> bool:
         return device in self._state and prop in self._state[device]
+
+    def device_names(self) -> list[str]:
+        return sorted(self._state.keys())
 
     async def wait_for(self, predicate: Callable[[], bool], timeout: float = 10.0) -> bool:
         """Poll the property cache until ``predicate`` is true or timeout elapses."""

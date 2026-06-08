@@ -32,12 +32,25 @@ export type FilterTel = {
 export type Telemetry = {
   ts: string;
   indi_connected: boolean;
+  server: { host: string; port: number };
   last_image_at: string | null;
   mount: MountTel | null;
   camera: CameraTel | null;
   focuser: FocuserTel | null;
   filter: FilterTel | null;
+  bindings: Record<string, string | null>;
 };
+
+export type IndiDevice = {
+  device: string;
+  roles: string[];
+  connected: boolean;
+  bound_as: string | null;
+  has_port: boolean;
+  port: string | null;
+};
+
+export const ROLES = ["mount", "camera", "focuser", "filter"] as const;
 
 export type ImageRec = {
   id: string;

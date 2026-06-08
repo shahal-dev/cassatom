@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, ImageRec, post, Telemetry } from "./api";
+import Devices from "./Devices";
 
 function fmt(n: number | null | undefined, d = 4): string {
   return n === null || n === undefined ? "—" : n.toFixed(d);
@@ -88,6 +89,8 @@ export default function App() {
       </header>
 
       {err && <div className="err">{err}</div>}
+
+      <Devices tel={tel} />
 
       <div className="grid">
         {/* Mount */}

@@ -72,3 +72,10 @@ button.small { font-size: 10px; padding: 2px 8px; margin-left: 8px; }
 .thumb .meta b { color: #fff; font-size: 12px; }
 .thumb .meta a { color: var(--accent); text-decoration: none; margin-top: 4px; }
 .thumb .meta a:hover { text-decoration: underline; }
+
+.devices { margin-bottom: 16px; }
+.devtable { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+.devtable th { text-align: left; color: var(--muted); font-weight: normal; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.devtable td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.devtable tr:last-child td { border-bottom: none; }
+.bindsummary { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
