@@ -105,8 +105,8 @@ The operator console shows, in real time:
   parks after the current exposure and waits.
 - A block has a **timeout & retry policy**; repeated failure marks it failed and
   moves on, notifying the operator.
-- **Dry-run / simulation**: any plan can be executed against the virtual (simulator)
-  site to validate timing and logic before going on-sky.
+- **Dry-run / validation**: any plan can be checked for timing, slew limits and
+  visibility (without commanding the mount) before going on-sky.
 
 ## 4. Calibration planning
 Bias/dark/flat acquisition is modeled as special blocks:

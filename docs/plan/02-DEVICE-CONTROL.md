@@ -218,15 +218,16 @@ Each device entry in the inventory DB declares:
 Adding hardware = adding a config row + ensuring its Alpaca/INDI driver runs at the
 site. **No CASSA code change.**
 
-## 9. Testing without hardware
+## 9. Testing & bring-up
 
-- **Simulators:** INDI ships simulator drivers (`indi_simulator_telescope`, `_ccd`,
-  `_focus`, `_wheel`, `_dome`, `_weather`) — use these so the virtual site exercises
-  the **exact same `IndiAdapter` + port-7624 path** as the real rig. (ASCOM/Alpaca
-  also ships simulators, for the future `AlpacaAdapter`.)
-- CASSA ships a **"virtual site"** profile wired entirely to simulators so the full
-  stack (planning → scheduling → execution → solve → archive) can be developed and
-  CI-tested with zero hardware. The Phase-1 cutover to real gear is then a **config
-  swap** (`indi_simulator_*` → `indi_eqmod` + `indi_toupbase`), not a code change.
+- **Protocol unit tests** exercise the pure-Python INDI client (vector parsing,
+  chunked streams, BLOB decode/inflate, command serialization) and the runtime
+  discovery/binding logic with **no hardware and no running server** — these run in
+  CI (`tests/test_protocol.py`, `tests/test_devices.py`).
+- **Bring-up on real gear:** run `indiserver` with your device drivers on the
+  observatory edge node, then **Scan → assign role → Connect** each device from the
+  console. The full stack (planning → scheduling → execution → solve → archive)
+  exercises the **same `IndiAdapter` + port-7624 path** regardless of brand, so
+  adding hardware never touches CASSA code — see §8 above.
 
 See **[06-WEATHER-SAFETY.md](06-WEATHER-SAFETY.md)** for how sensors drive safety.

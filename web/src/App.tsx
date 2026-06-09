@@ -85,7 +85,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <h1>CASSA · Virtual Site</h1>
+        <h1>CASSA · Console</h1>
         <span className={`pill ${wsOk ? "ok" : "bad"}`}>{wsOk ? "live" : "offline"}</span>
         <span className={`pill ${tel?.indi_connected ? "ok" : "bad"}`}>
           INDI {tel?.indi_connected ? "connected" : "down"}

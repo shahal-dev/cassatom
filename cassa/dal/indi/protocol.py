@@ -1,8 +1,8 @@
 """Minimal async INDI protocol client (pure Python, no native dependencies).
 
 Speaks the INDI XML wire protocol over TCP (default port 7624), so CASSA can drive
-any ``indiserver`` — the Phase-0 simulator drivers *or* real drivers like
-``indi_eqmod`` / ``indi_toupbase`` — without pyindi-client / libindi build deps.
+any ``indiserver`` running real device drivers — without pyindi-client / libindi
+build deps.
 
 The client maintains a cache of every device's properties (updated on each
 def*/set*Vector message) and exposes simple accessors plus command helpers. BLOBs

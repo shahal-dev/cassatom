@@ -1,35 +1,34 @@
-"""Configuration: env vars (CASSA_*) plus an optional site YAML file.
+"""Configuration via environment variables (``CASSA_*``) or a ``.env`` file.
 
-The site YAML is the config-driven device map. Swapping from the virtual site to
-real hardware is just editing this file (device names) — no code change.
+There is no device map in config: CASSA discovers whatever devices the INDI
+server exposes and you bind each role (mount/camera/focuser/filter) to a real
+device at runtime from the web console. Those bindings persist to
+``bindings_path``. The only config here is where the INDI server lives plus the
+identity stamped into FITS provenance and obsids.
 """
 from __future__ import annotations
 
 import logging
-import pathlib
 
-import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = logging.getLogger("cassa.config")
 
 
 class Settings(BaseSettings):
+    # INDI server (typically a remote edge node at the observatory). Can also be
+    # repointed at runtime from the console; the chosen host/port persist with
+    # the device bindings.
     indi_host: str = "localhost"
     indi_port: int = 7624
-    site_config: str = "sites/virtual.yaml"
-
-    mount_device: str = "Telescope Simulator"
-    camera_device: str = "CCD Simulator"
-    focuser_device: str = "Focuser Simulator"
-    filterwheel_device: str = "Filter Simulator"
 
     # identity baked into FITS provenance + obsids
-    site_id: str = "virtual"
-    instrument_id: str = "vinstr"
+    site_id: str = "cassa"
+    instrument_id: str = "instr"
     observer: str = "CASSA"
-    telescope_name: str = "Telescope Simulator"
-    instrument_name: str = "CCD Simulator"
+    # fallbacks used only when no mount/camera is bound yet
+    telescope_name: str = "Unknown"
+    instrument_name: str = "Unknown"
 
     # archive
     db_url: str = "sqlite+aiosqlite:///data/cassa.db"
@@ -43,27 +42,5 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     s = Settings()
-    path = pathlib.Path(s.site_config)
-    if not path.exists():
-        log.info("no site config at %s; using defaults/env", path)
-        return s
-    cfg = yaml.safe_load(path.read_text()) or {}
-    indi = cfg.get("indi", {})
-    s.indi_host = indi.get("host", s.indi_host)
-    s.indi_port = int(indi.get("port", s.indi_port))
-    site = cfg.get("site", {})
-    if site.get("id"):
-        s.site_id = site["id"]
-    role_to_field = {
-        "mount": "mount_device",
-        "camera": "camera_device",
-        "focuser": "focuser_device",
-        "filterwheel": "filterwheel_device",
-    }
-    for dev in cfg.get("devices", []):
-        field = role_to_field.get(dev.get("role"))
-        if field and dev.get("indi_device"):
-            setattr(s, field, dev["indi_device"])
-    log.info("loaded site config %s (mount=%s, camera=%s, focuser=%s, wheel=%s)",
-             path, s.mount_device, s.camera_device, s.focuser_device, s.filterwheel_device)
+    log.info("config loaded — INDI %s:%s, site=%s", s.indi_host, s.indi_port, s.site_id)
     return s

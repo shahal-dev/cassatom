@@ -1,8 +1,8 @@
 """INDI implementations of the device roles (Mount, Camera, Focuser, FilterWheel).
 
-These map the vendor-neutral role methods onto standard INDI properties. The same
-adapter drives the simulator drivers and the real EQ6-R (``indi_eqmod``) / ToupTek
-(``indi_toupbase``) — only the device names in config differ.
+These map the vendor-neutral role methods onto standard INDI properties, so the
+same adapter drives any real INDI-supported device (mounts, CCD/CMOS cameras,
+focusers, filter wheels) regardless of brand — the device is chosen at runtime.
 """
 from __future__ import annotations
 

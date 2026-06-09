@@ -71,19 +71,19 @@ astronomy ecosystem (Astropy, astrometry.net, INDI, ASCOM Alpaca) is first-class
 | VPN | **WireGuard** (sites dial out to core hub) |
 | Time sync | **chrony (NTP)**; **PTP** if sub-ms needed |
 | Secrets | **HashiCorp Vault** or SOPS-encrypted; never in git |
-| CI/CD | **GitHub Actions** / GitLab CI; build images, run the simulator-site integration tests |
+| CI/CD | **GitHub Actions** / GitLab CI; build images, run the protocol + pipeline unit/integration tests |
 | Observability | **Prometheus** + **Grafana** (metrics), **Loki** (logs), **OpenTelemetry** (traces), **Sentry** (errors) |
 | Notifications | Slack/Telegram bots, SMTP email, optional SMS gateway |
 
 ## 7. Testing
 | Level | Approach |
 |-------|----------|
-| Unit | pytest; mock device adapters |
-| Integration | **Virtual site** wired to **ASCOM/INDI simulators** — full plan→execute→solve→archive with no hardware |
+| Unit | pytest; INDI protocol parsing/serialization, device discovery/binding, FITS authoring (no hardware, no server) |
+| Integration | Against a real `indiserver` on a bench rig — full plan→execute→solve→archive |
 | Plate-solve | Fixture FITS frames with known WCS; assert solved within tolerance |
-| Safety | Fault-injection: simulate rain/wind/sensor-timeout/link-drop → assert dome closes & mount parks |
+| Safety | Fault-injection: inject rain/wind/sensor-timeout/link-drop faults → assert dome closes & mount parks |
 | Load | Telemetry fan-out + many concurrent WS clients |
-| End-to-end | Cypress/Playwright against the virtual site |
+| End-to-end | Cypress/Playwright against the running console + backend |
 
 ## 8. Repository structure (monorepo suggestion)
 ```
@@ -96,7 +96,6 @@ cassa/
   common/               # shared pydantic models, schemas, utils
   web/                  # React frontend
   deploy/               # docker-compose, k8s, wireguard, ansible
-  sims/                 # virtual-site config + simulator wiring
   docs/plan/            # ← this plan
   tests/
 ```

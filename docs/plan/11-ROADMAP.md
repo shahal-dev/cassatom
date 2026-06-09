@@ -1,40 +1,42 @@
 # 11 — Roadmap (phased delivery)
 
 Build in thin, working slices. Each phase ends with something **operable and
-testable**, ideally against the **virtual (simulator) site** before real hardware.
-This de-risks the project and lets IUB build software in parallel with procurement.
+testable** on the real rig. CASSA targets real instruments over INDI only —
+devices are discovered from the INDI server and bound to roles at runtime, so
+software can be built against a small bench rig and scaled to the full kit.
 
 ---
 
-## Phase 0 — Foundations & virtual site (weeks 1–4)
-**Goal:** scaffolding + a fully simulated telescope you can drive by hand.
+## Phase 0 — Foundations (weeks 1–4)
+**Goal:** scaffolding + a telescope you can drive by hand from the browser.
 - Repo, CI, Docker Compose, Postgres/Timescale/MinIO/Redis/NATS up.
-- Device Abstraction Layer + **`IndiAdapter`**; wire to **INDI simulator drivers**
-  (`indi_simulator_telescope`, `_ccd`, `_focus`, `_wheel`, `_dome`,
-  `_weather`/`_gps`) — the virtual site mirrors the real INDI path exactly.
-- Site Agent skeleton: Device Manager (INDI client → `localhost:7624`) + telemetry
-  publisher.
-- Minimal core API + a basic web console: **manual control of the simulated mount &
-  camera**, live telemetry over WebSocket.
-- ✅ *Milestone:* slew, expose, see a simulated image and live RA/Dec in the browser.
+- Device Abstraction Layer + **`IndiAdapter`** speaking the INDI XML wire protocol
+  directly (no pyindi/libindi build deps).
+- Site Agent skeleton: Device Manager — connects to a real `indiserver`,
+  **discovers devices and binds roles at runtime** (persisted to `bindings.json`) —
+  + telemetry publisher.
+- Minimal core API + a basic web console: **Scan → assign → Connect**, manual
+  control of the mount & camera, live telemetry over WebSocket.
+- ✅ *Milestone:* connect to the INDI server, slew, expose, see the image and live
+  RA/Dec in the browser.
 
-## Phase 1 — Manual control & imaging, real hardware (EQ6-R + ToupTek) (weeks 5–10)
-**Goal:** drive the real test rig end-to-end, manually, via INDI.
-- Harden `IndiAdapter`; cut over from simulator drivers to the real drivers
-  (`indi_eqmod`, `indi_toupbase`) + PHD2 — see the **bring-up checklist** below.
+## Phase 1 — Manual control & imaging on the real rig (weeks 5–10)
+**Goal:** drive a real test rig end-to-end, manually, via INDI.
+- Harden `IndiAdapter` against real drivers (e.g. `indi_eqmod`, `indi_toupbase`,
+  ASI, etc.) + PHD2 — see the **bring-up checklist** below.
 - Full manual panels: mount jog/goto, camera (cooler/gain/bin/preview), focuser,
   guiding (PHD2), power switches. *(Dome/roll-off panel built but inactive until a
   dome is present.)*
 - FITS authoring with full headers + checksums; save to edge disk.
 - **SFTP edge→core ingest** + object-store archive + DB index + previews.
 - Basic archive browser + **SFTP/FTP download gateway** (SFTPGo) for users.
-- ✅ *Milestone:* operator manually images a target on the EQ6-R + Minicam8; file
-  lands in the archive and is downloadable over SFTP/FTP.
-- **Status:** implemented against the **virtual site** — capture → provenance FITS
-  (headers + `CHECKSUM`/SHA-256) → local object store + SQLite index → archive API +
-  browser → HTTPS/SFTP (SFTPGo) download; focuser + filter-wheel manual control.
-  Remaining for real hardware: PHD2 guiding panel, camera cooler/gain/ROI controls,
-  and the on-site EQDIR/`indi_toupbase` bring-up (see checklist above).
+- ✅ *Milestone:* operator manually images a target; file lands in the archive and
+  is downloadable over SFTP/FTP.
+- **Status:** pipeline implemented — capture → provenance FITS (headers +
+  `CHECKSUM`/SHA-256) → local object store + SQLite index → archive API + browser →
+  HTTPS/SFTP (SFTPGo) download; focuser + filter-wheel manual control; runtime
+  device discovery + binding from the console. Remaining: PHD2 guiding panel,
+  camera cooler/gain/ROI controls, and on-site bring-up (see checklist below).
 
 ## Phase 2 — Plate solving, calibration & QA (weeks 9–14)
 **Goal:** scientifically useful frames.
@@ -64,8 +66,8 @@ This de-risks the project and lets IUB build software in parallel with procureme
   Sun-avoidance, hardware watchdog/relay, UPS-triggered park+close.
 - Central weather/safety dashboard + notifications + Emergency Stop.
 - Fault-injection test suite (rain/wind/sensor-timeout/link-drop).
-- ✅ *Milestone:* simulated and real bad-weather events automatically close the dome &
-  park the mount — even with the core link cut.
+- ✅ *Milestone:* bad-weather events (and injected fault tests) automatically close
+  the dome & park the mount — even with the core link cut.
 
 ## Phase 5 — Multi-site (weeks 23–30)
 **Goal:** operate ≥2 sites from one console.
@@ -99,11 +101,12 @@ This de-risks the project and lets IUB build software in parallel with procureme
 
 ---
 
-## Hardware bring-up checklist (Phase 0 → Phase 1 cutover)
+## Hardware bring-up checklist (Phase 1)
 
-The test rig: **Sky-Watcher EQ6-R Pro** + **ToupTek Minicam8** (imaging) + **ToupTek
-AAF** (focuser) + **ToupTek GEM guide cam**, all on **one open Linux edge node** via
-**INDI**. (See [02-DEVICE-CONTROL.md](02-DEVICE-CONTROL.md) §1a.)
+A concrete example test rig: **Sky-Watcher EQ6-R Pro** + **ToupTek Minicam8**
+(imaging) + **ToupTek AAF** (focuser) + **ToupTek GEM guide cam**, all on **one open
+Linux edge node** via **INDI**. The steps generalize to any brand — substitute your
+drivers. (See [02-DEVICE-CONTROL.md](02-DEVICE-CONTROL.md) §1a.)
 
 ### A. Edge node & OS
 - [ ] Provision the edge box: **Raspberry Pi 5 (8 GB)** or x86 mini-PC, **Ubuntu
@@ -118,8 +121,8 @@ AAF** (focuser) + **ToupTek GEM guide cam**, all on **one open Linux edge node**
 ### B. Mount — EQ6-R Pro
 - [ ] Wire an **EQDIR / USB-serial** adapter from the PC to the mount's hand-controller
       port (bypass the SynScan handset for automation).
-- [ ] Identify the serial device (`/dev/ttyUSB0` or `/dev/serial/by-id/...`); use the
-      stable `by-id` path in config so it survives reboots.
+- [ ] Identify the serial device (`/dev/ttyUSB0` or `/dev/serial/by-id/...`); enter the
+      stable `by-id` path in the mount's row in the console so it survives reboots.
 - [ ] Start `indi_eqmod`; set port + baud; **connect**. Verify RA/Dec readout, N/S/E/W
       jog, tracking on/off, **park/unpark**, and `abort_slew`.
 - [ ] Set the **site location** (lat/lon/elev) and confirm a goto lands sensibly.
@@ -129,7 +132,7 @@ AAF** (focuser) + **ToupTek GEM guide cam**, all on **one open Linux edge node**
 
 ### C. Cameras & focuser — ToupTek (`indi_toupbase`)
 - [ ] Plug **Minicam8**, **AAF**, **GEM guide cam** into USB 3.0; start `indi_toupbase`.
-- [ ] Verify each enumerates; note exact device names (for config rows).
+- [ ] Verify each enumerates; note exact device names (to recognize them in **Scan**).
 - [ ] **Minicam8:** take a bias, dark, and a short light; confirm gain/offset/binning/
       ROI controls and (if present) cooler setpoint behave. Record pixel size + sensor
       dims for FITS headers + plate-solve scale.
@@ -144,11 +147,12 @@ AAF** (focuser) + **ToupTek GEM guide cam**, all on **one open Linux edge node**
 - [ ] Enable PHD2's **server/event API**; confirm CASSA can read the guide graph and
       issue start/stop/dither.
 
-### E. CASSA cutover (simulator → real)
-- [ ] Swap the virtual-site config from `indi_simulator_*` to the **real drivers**
-      (`indi_eqmod`, `indi_toupbase`) — *config only, no code change*.
-- [ ] Confirm CASSA's `IndiAdapter` connects to `localhost:7624` and all roles map:
-      mount, camera (imaging), focuser, guide (via PHD2).
+### E. CASSA connection & end-to-end
+- [ ] Run `indiserver` with the real drivers (`indi_eqmod`, `indi_toupbase`, …) on the
+      edge node; point `CASSA_INDI_HOST/PORT` at it (or set it from the console).
+- [ ] In the console: **Scan → assign role → Connect** each device. Confirm all roles
+      map: mount, camera (imaging), focuser, guide (via PHD2). Bindings persist to
+      `bindings.json`.
 - [ ] End-to-end manual test: **slew → focus → expose → readout → FITS with full
       headers + checksum → SFTP to core → archived → preview in UI → download over
       SFTP/FTP.**
@@ -167,8 +171,8 @@ AAF** (focuser) + **ToupTek GEM guide cam**, all on **one open Linux edge node**
   spine is: 0 → 1 → 2 → 3 → 4, with 5/6 layering on top.
 - **Safety (Phase 4)** must land before any *unattended* operation, even though
   device control comes earlier.
-- Keep the **virtual site** working throughout — it's your regression net and lets
-  development continue regardless of hardware/weather availability.
+- Keep a small **bench rig** (mount + camera on a desk) available throughout — it's
+  your regression net and lets development continue regardless of dome/weather.
 - Procurement of mounts/cameras/domes/sensors and **astrometry.net index files**
   should start during Phase 0–1 so hardware is ready for Phase 1–2.
 
@@ -182,7 +186,7 @@ AAF** (focuser) + **ToupTek GEM guide cam**, all on **one open Linux edge node**
 ## Top risks & mitigations
 | Risk | Mitigation |
 |------|------------|
-| Hardware/driver incompatibility | INDI-first via the DAL (Alpaca added later); INDI simulator-first; buy gear with known INDI drivers |
+| Hardware/driver incompatibility | INDI-first via the DAL (Alpaca added later); bench-test each device's driver before install; buy gear with known INDI drivers |
 | Remote-site network flakiness | Edge autonomy, durable bus, resumable transfers, dial-out VPN |
 | Weather damage (monsoon/dew) | Fail-safe Safety FSM + hardware relay + UPS; conservative limits |
 | Scope creep | Phase gates; CASSA stops at calibrated+solved frames, science pipelines are hooks |

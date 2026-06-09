@@ -3,8 +3,7 @@
 The INDI *transport* (connection to ``indiserver``) auto-connects and retries. Which
 discovered device fills each *role* (mount/camera/focuser/filter) is decided at
 runtime from the frontend and persisted to ``bindings.json`` — no hardcoded device
-names. This is how CASSA moves from the simulator to real hardware without code or
-even YAML edits: pick the real devices in the console.
+names. Pick the real devices in the console; bindings persist to ``bindings.json``.
 """
 from __future__ import annotations
 

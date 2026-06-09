@@ -1,16 +1,10 @@
-name: cassa-phase0
+name: cassa
+
+# The INDI server runs on the observatory edge node (real device drivers), not
+# here. Point CASSA_INDI_HOST/PORT at it (or set it from the console). This file
+# only provisions CASSA's own supporting infrastructure.
 
 services:
-  # Phase-0 essential: the INDI virtual site (simulator drivers on 7624).
-  indi-sim:
-    build:
-      context: .
-      dockerfile: indi-sim.Dockerfile
-    image: cassa/indi-sim:latest
-    ports:
-      - "7624:7624"
-    restart: unless-stopped
-
   # --- Infrastructure for later phases. Start with: docker compose --profile infra up -d
   timescaledb:
     image: timescale/timescaledb:latest-pg16

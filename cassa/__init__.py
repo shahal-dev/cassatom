@@ -1,7 +1,8 @@
 """CASSA — Coordinated Astronomical Scheduling, Slewing & Acquisition.
 
-Phase 0: an in-process modular monolith (DAL + Site Agent + Core API) that drives
-the INDI virtual site (simulator drivers) and, with a config swap, real hardware.
+An in-process modular monolith (DAL + Site Agent + Core API) that drives real
+hardware over INDI. Devices are discovered from the INDI server and bound to
+roles at runtime from the web console — no device map in config.
 """
 
 __version__ = "0.0.1"

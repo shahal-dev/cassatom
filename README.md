@@ -1,7 +1,8 @@
 # CASSA — Phases 0–1
 
-Multi-site telescope/dome control system, built against a fully **simulated
-telescope** you can drive by hand from a browser — no real hardware needed yet.
+Multi-site telescope/dome control system that drives **real instruments** over
+INDI from a browser. Devices are discovered from the INDI server and bound to
+roles at runtime — no hardcoded device map, any INDI-supported brand.
 
 The full design lives in [`docs/plan/`](docs/plan/README.md). This README is the
 runnable slice.
@@ -9,8 +10,8 @@ runnable slice.
 ## What works
 
 **Phase 0 — foundations & manual control**
-- A pure-Python **async INDI client** (`cassa/dal/indi/protocol.py`) — same code path
-  for the simulators and, later, the real EQ6-R (`indi_eqmod`) + ToupTek (`indi_toupbase`).
+- A pure-Python **async INDI client** (`cassa/dal/indi/protocol.py`) that speaks
+  the INDI XML wire protocol directly — no pyindi-client / libindi build deps.
 - **DAL roles**: `Mount`, `Camera`, `Focuser`, `FilterWheel` (`cassa/dal/`).
 - **Site Agent** (`cassa/agent/`) with a resilient INDI connection + live previews.
 - **Core API** + **web console**: live telemetry, slew/park/abort, expose.
@@ -24,7 +25,7 @@ runnable slice.
 - **Focuser + filter-wheel** manual control; filter recorded into FITS headers.
 - **SFTP/FTP download gateway** (SFTPGo) over the archive for bulk retrieval.
 
-> **Milestone:** capture a target on the (simulated) camera → a provenance FITS lands
+> **Milestone:** capture a target on the camera → a provenance FITS lands
 > in the archive → download it over HTTPS or SFTP.
 
 ## Architecture (Phase 0)
@@ -36,7 +37,7 @@ runnable slice.
                               Site Agent / DeviceManager
                                    │  async INDI (XML, TCP 7624)
                                    ▼
-                              indiserver  (simulator drivers)
+                       indiserver  (real device drivers, edge node)
 ```
 
 Agent + Core run in **one process** for Phase 0 (modular monolith). The NATS message
@@ -46,16 +47,19 @@ bus that separates them arrives in Phase 5 when there's a real remote site.
 
 - Python 3.11+
 - Node 18+ (for the web console)
-- Docker (easiest way to run the INDI simulator) **or** a local `indiserver`
+- An `indiserver` running your real device drivers, reachable over TCP (port 7624).
+  This usually runs on the **observatory edge node** next to the hardware.
 
 ## Run it (3 terminals)
 
-### 1. Start the INDI simulator
+### 1. Start the INDI server (on the edge node, with your real drivers)
 ```bash
-make indi                 # docker: builds & runs indiserver on :7624
-# — or, with INDI installed locally (sudo apt install indi-bin):
-indiserver -v indi_simulator_telescope indi_simulator_ccd
+# On the machine the instruments are wired to (sudo apt install indi-bin + the
+# vendor driver packages), run indiserver with your device drivers, e.g.:
+indiserver -v indi_eqmod indi_toupbase indi_asi_ccd   # whatever you have
 ```
+Point CASSA at it with `CASSA_INDI_HOST`/`CASSA_INDI_PORT` (or set the host/port
+from the console). If the instruments are on the same box, `localhost:7624` works.
 
 ### 2. Start the core API
 ```bash
@@ -87,11 +91,6 @@ Once bound, the Mount/Camera/Focuser panels go live: slew, capture, and archive.
 > Order doesn't matter — the backend retries the INDI connection and the console
 > reconnects the WebSocket automatically.
 
-### Moving to real hardware
-Run `indiserver` with the real drivers instead of the simulators
-(`indiserver -v indi_eqmod indi_toupbase`), then **Scan → assign → Connect** in the
-Devices panel. Same UI, real telescope — no code or config-file change.
-
 ## Quick API check (no browser)
 ```bash
 curl localhost:8000/api/status
@@ -115,12 +114,13 @@ docker compose -f deploy/docker-compose.yml --profile ftp up -d
 sftp -P 2022 <user>@localhost      # browse raw/ previews/ thumbs/
 ```
 
-## Cutover to real hardware (Phase 1)
+## Multi-device / multi-brand notes
 
-No code change — edit [`sites/virtual.yaml`](sites/virtual.yaml): point `indi.host`
-at the edge node and set the real device names (`EQMod Mount`, the ToupTek device
-name). Run the real drivers on the edge node instead of the simulators. See the
-**bring-up checklist** in [`docs/plan/11-ROADMAP.md`](docs/plan/11-ROADMAP.md).
+CASSA makes no assumptions about device brands. Whatever your `indiserver`
+exposes shows up under **Scan**; assign each to a role and connect. Serial mounts
+(e.g. EQ6-R via EQDIR) take a port like `/dev/ttyUSB0` in their row before
+connecting. See the **bring-up checklist** in
+[`docs/plan/11-ROADMAP.md`](docs/plan/11-ROADMAP.md).
 
 ## Layout
 ```
@@ -129,7 +129,6 @@ cassa/
   agent/      site agent (device manager)
   core/       FastAPI app + config
 web/          React + TypeScript console
-deploy/       docker-compose + INDI simulator image
-sites/        site config (virtual.yaml)
+deploy/       docker-compose (supporting infra + SFTP gateway)
 docs/plan/    full system design
 ```

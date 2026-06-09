@@ -26,10 +26,10 @@ def _client() -> INDIClient:
 def test_vector_parsing_and_chunked_stream():
     c = _client()
     msg = (
-        '<defSwitchVector device="Telescope Simulator" name="CONNECTION" state="Ok" perm="rw">'
+        '<defSwitchVector device="EQMod Mount" name="CONNECTION" state="Ok" perm="rw">'
         '<defSwitch name="CONNECT">On</defSwitch><defSwitch name="DISCONNECT">Off</defSwitch>'
         '</defSwitchVector>'
-        '<defNumberVector device="Telescope Simulator" name="EQUATORIAL_EOD_COORD" state="Busy">'
+        '<defNumberVector device="EQMod Mount" name="EQUATORIAL_EOD_COORD" state="Busy">'
         '<defNumber name="RA">5.59</defNumber><defNumber name="DEC">-5.39</defNumber>'
         '</defNumberVector>'
     )
@@ -37,12 +37,12 @@ def test_vector_parsing_and_chunked_stream():
     c._feed(msg[:mid].encode())  # split mid-message to exercise buffering
     c._feed(msg[mid:].encode())
 
-    assert c.element("Telescope Simulator", "CONNECTION", "CONNECT") is True
-    assert c.element("Telescope Simulator", "CONNECTION", "DISCONNECT") is False
-    assert c.element("Telescope Simulator", "EQUATORIAL_EOD_COORD", "RA") == 5.59
-    assert c.element("Telescope Simulator", "EQUATORIAL_EOD_COORD", "DEC") == -5.39
-    assert c.prop_state("Telescope Simulator", "EQUATORIAL_EOD_COORD") == "Busy"
-    assert c.has_prop("Telescope Simulator", "CONNECTION")
+    assert c.element("EQMod Mount", "CONNECTION", "CONNECT") is True
+    assert c.element("EQMod Mount", "CONNECTION", "DISCONNECT") is False
+    assert c.element("EQMod Mount", "EQUATORIAL_EOD_COORD", "RA") == 5.59
+    assert c.element("EQMod Mount", "EQUATORIAL_EOD_COORD", "DEC") == -5.39
+    assert c.prop_state("EQMod Mount", "EQUATORIAL_EOD_COORD") == "Busy"
+    assert c.has_prop("EQMod Mount", "CONNECTION")
 
 
 def test_set_vector_updates_cache():
@@ -61,11 +61,11 @@ def test_plain_blob_decoded():
     c.add_blob_handler(lambda d, n, e, data, fmt: blobs.append((d, data, fmt)))
     raw = b"SIMPLE  =  T / fake fits\n" * 8
     payload = base64.b64encode(raw).decode()
-    c._feed(f'<setBLOBVector device="CCD Simulator" name="CCD1" state="Ok">'
+    c._feed(f'<setBLOBVector device="Toupcam" name="CCD1" state="Ok">'
             f'<oneBLOB name="CCD1" size="{len(raw)}" format=".fits">{payload}</oneBLOB>'
             f'</setBLOBVector>'.encode())
     assert len(blobs) == 1
-    assert blobs[0] == ("CCD Simulator", raw, ".fits")
+    assert blobs[0] == ("Toupcam", raw, ".fits")
 
 
 def test_compressed_blob_inflated():
@@ -74,7 +74,7 @@ def test_compressed_blob_inflated():
     c.add_blob_handler(lambda d, n, e, data, fmt: blobs.append((data, fmt)))
     raw = b"x" * 500
     payload = base64.b64encode(zlib.compress(raw)).decode()
-    c._feed(f'<setBLOBVector device="CCD Simulator" name="CCD1" state="Ok">'
+    c._feed(f'<setBLOBVector device="Toupcam" name="CCD1" state="Ok">'
             f'<oneBLOB name="CCD1" size="{len(raw)}" format=".fits.z">{payload}</oneBLOB>'
             f'</setBLOBVector>'.encode())
     assert blobs[0] == (raw, ".fits")  # inflated, suffix stripped
@@ -99,11 +99,11 @@ def test_command_serialization():
     c._send = fake_send
     asyncio.run(c.set_switch("T", "ON_COORD_SET", {"TRACK": True, "SLEW": False}))
     asyncio.run(c.set_number("T", "EQUATORIAL_EOD_COORD", {"RA": 5.59, "DEC": -5.39}))
-    asyncio.run(c.enable_blob("CCD Simulator", "Also"))
+    asyncio.run(c.enable_blob("Toupcam", "Also"))
     assert '<oneSwitch name="TRACK">On</oneSwitch>' in sent[0]
     assert '<oneSwitch name="SLEW">Off</oneSwitch>' in sent[0]
     assert '<oneNumber name="RA">5.59</oneNumber>' in sent[1]
-    assert sent[2] == '<enableBLOB device="CCD Simulator">Also</enableBLOB>'
+    assert sent[2] == '<enableBLOB device="Toupcam">Also</enableBLOB>'
 
 
 if __name__ == "__main__":
