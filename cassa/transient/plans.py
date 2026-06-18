@@ -12,6 +12,7 @@ already completed, so an interrupted plan continues where it stopped.
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import uuid
 
@@ -72,10 +73,37 @@ class PlanService:
             p.repeat = max(1, int(data.get("repeat") or 1))
             p.autofocus = bool(data.get("autofocus"))
             p.center = bool(data.get("center"))
+            p.scheduled_utc = data.get("scheduled_utc") or None
             p.source = data.get("source") or "manual"
             p.updated_at = _utcnow()
             await session.commit()
             return p.dict()
+
+    async def due_plans(self) -> list[dict]:
+        """Plans whose scheduled time has arrived (and not yet cleared)."""
+        now = dt.datetime.now(dt.timezone.utc)
+        out: list[dict] = []
+        async with self.sm() as session:
+            rows = (await session.execute(
+                select(Plan).where(Plan.scheduled_utc.isnot(None))
+            )).scalars().all()
+            for p in rows:
+                try:
+                    when = dt.datetime.fromisoformat(p.scheduled_utc.replace("Z", "+00:00"))
+                    if when.tzinfo is None:
+                        when = when.replace(tzinfo=dt.timezone.utc)
+                except (ValueError, AttributeError):
+                    continue
+                if when <= now:
+                    out.append(p.dict())
+        return out
+
+    async def clear_schedule(self, pid: str) -> None:
+        async with self.sm() as session:
+            p = await session.get(Plan, pid)
+            if p:
+                p.scheduled_utc = None
+                await session.commit()
 
     async def delete_plan(self, pid: str) -> None:
         async with self.sm() as session:

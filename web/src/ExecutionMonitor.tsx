@@ -1,28 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plan, QueueBlock, Telemetry, getJSON, post } from "./api";
+import { Plan, Telemetry, getJSON, post } from "./api";
 import ConfirmBanner from "./ConfirmBanner";
-
-function fmtTime(iso: string | null | undefined, tz: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
-  if (isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit" });
-}
+import TonightTargets from "./TonightTargets";
 
 export default function ExecutionMonitor({ tel }: { tel: Telemetry | null }) {
-  const [queue, setQueue] = useState<QueueBlock[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [q, p] = await Promise.all([
-        getJSON<QueueBlock[]>("/api/transient/queue"),
-        getJSON<Plan[]>("/api/transient/plans"),
-      ]);
-      setQueue(q);
-      setPlans(p);
+      setPlans(await getJSON<Plan[]>("/api/transient/plans"));
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     }
@@ -45,14 +33,6 @@ export default function ExecutionMonitor({ tel }: { tel: Telemetry | null }) {
     } finally {
       setBusy(false);
     }
-  };
-
-  const move = (idx: number, dir: -1 | 1) => {
-    const ids = queue.map((b) => b.id);
-    const j = idx + dir;
-    if (j < 0 || j >= ids.length) return;
-    [ids[idx], ids[j]] = [ids[j], ids[idx]];
-    call(() => post("/api/transient/queue/reorder", { block_ids: ids }));
   };
 
   const ex = tel?.executor ?? null;
@@ -125,6 +105,8 @@ export default function ExecutionMonitor({ tel }: { tel: Telemetry | null }) {
 
       {err && <div className="err">{err}</div>}
 
+      <TonightTargets />
+
       <section className="card">
         <h2>Plans <span className="muted">· {plans.length}</span></h2>
         {!plans.length && <div className="muted">no saved plans — build one in the Plan tab.</div>}
@@ -149,40 +131,6 @@ export default function ExecutionMonitor({ tel }: { tel: Telemetry | null }) {
         ))}
       </section>
 
-      <section className="card">
-        <h2>
-          Queue <span className="muted">· {queue.length}</span>
-          <button className="small" onClick={refresh}>refresh</button>
-        </h2>
-        {!queue.length && <div className="muted">queue is empty — approve a candidate to Queue or Execute.</div>}
-        {queue.map((b, i) => (
-          <div className="candrow" key={b.id}>
-            <div className="candhead">
-              <b style={{ color: "#fff" }}>{b.request?.object_name ?? b.id}</b>
-              {b.class_label && <span className="pill idle">{b.class_label}</span>}
-              <span className="pill idle">{b.request?.mode}</span>
-              <span className={`pill ${b.state === "running" ? "ok" : b.state === "paused" ? "warn" : "idle"}`}>
-                {b.state}
-              </span>
-              <span className="muted">
-                {b.n_done}/{b.total_steps - 3} frames · window{" "}
-                {fmtTime(b.request?.window_start_utc, "Asia/Dhaka")}–{fmtTime(b.request?.window_end_utc, "Asia/Dhaka")} BST
-              </span>
-            </div>
-            <div className="row">
-              <button
-                className="active"
-                disabled={busy || b.state !== "queued"}
-                onClick={() => call(() => post("/api/transient/executor/launch", { block_id: b.id }))}
-              >
-                Launch
-              </button>
-              <button className="small" disabled={busy || i === 0} onClick={() => move(i, -1)}>↑</button>
-              <button className="small" disabled={busy || i === queue.length - 1} onClick={() => move(i, 1)}>↓</button>
-            </div>
-          </div>
-        ))}
-      </section>
     </div>
   );
 }

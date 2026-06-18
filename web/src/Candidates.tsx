@@ -24,11 +24,24 @@ function fmt(n: number | null | undefined, d = 1): string {
   return n === null || n === undefined ? "—" : n.toFixed(d);
 }
 
-type Act = (id: string, kind: "queue" | "execute" | "reject") => void;
+const toUtcIso = (local: string): string | null => {
+  if (!local) return null;
+  const d = new Date(local);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+};
+
+type ActOpts = { exptime?: number; count?: number; scheduled_utc?: string | null; launch?: boolean };
+type Act = (id: string, kind: "queue" | "execute" | "reject" | "reset", opts?: ActOpts) => void;
 
 function CandidateRow({ c, busy, act }: { c: Candidate; busy: string | null; act: Act }) {
   const decided = c.state.startsWith("approved") || c.state === "rejected";
   const oid = c.alert_id;
+  const [exp, setExp] = useState("120");
+  const [shots, setShots] = useState("5");
+  const [start, setStart] = useState(""); // datetime-local (browser tz), optional
+  const recipe = (): ActOpts => ({ exptime: parseFloat(exp) || 120, count: parseInt(shots) || 1 });
+  const off = decided || !c.observable;
+
   return (
     <div className={`candrow${c.observable ? "" : " dim"}`}>
       <div className="candhead">
@@ -64,15 +77,30 @@ function CandidateRow({ c, busy, act }: { c: Candidate; busy: string | null; act
             : "—"}
         </b>
       </div>
+      {!decided && (
+        <div className="row">
+          <label>Exp (s)<input className="cell" value={exp} onChange={(e) => setExp(e.target.value)} /></label>
+          <label>Shots<input className="cell" value={shots} onChange={(e) => setShots(e.target.value)} /></label>
+          <label>Start time<input type="datetime-local" style={{ width: "auto" }} value={start} onChange={(e) => setStart(e.target.value)} /></label>
+        </div>
+      )}
       <div className="row">
-        <button className="active" disabled={decided || !c.observable || busy === c.id + "queue"}
-                title={c.observable ? "" : "Not observable tonight"}
-                onClick={() => act(c.id, "queue")}>Approve → Queue</button>
-        <button disabled={decided || !c.observable || busy === c.id + "execute"}
-                title={c.observable ? "" : "Not observable tonight"}
-                onClick={() => act(c.id, "execute")}>Approve → Execute</button>
-        <button className="danger" disabled={decided || busy === c.id + "reject"}
-                onClick={() => act(c.id, "reject")}>Reject</button>
+        <button className="active" disabled={off || busy === c.id + "execute"}
+                title={c.observable ? "Start exposing now with these settings" : "Not observable tonight"}
+                onClick={() => act(c.id, "execute", { ...recipe(), launch: true })}>Execute now</button>
+        <button disabled={off || !start || busy === c.id + "queue"}
+                title={start ? "Queue to run at the start time" : "Set a start time first"}
+                onClick={() => act(c.id, "queue", { ...recipe(), scheduled_utc: toUtcIso(start) })}>Queue @ time</button>
+        <button disabled={off || busy === c.id + "queue"}
+                title="Queue without a time — sorted by best observable time"
+                onClick={() => act(c.id, "queue", recipe())}>Queue</button>
+        {decided ? (
+          <button disabled={busy === c.id + "reset"} title="Re-open this candidate"
+                  onClick={() => act(c.id, "reset")}>↺ Reset</button>
+        ) : (
+          <button className="danger" disabled={busy === c.id + "reject"}
+                  onClick={() => act(c.id, "reject")}>Reject</button>
+        )}
       </div>
     </div>
   );
@@ -138,12 +166,21 @@ export default function Candidates() {
     if (page > pageCount - 1) setPage(pageCount - 1);
   }, [pageCount, page]);
 
-  const act: Act = async (id, kind) => {
+  const act: Act = async (id, kind, opts) => {
     setErr(null);
     setBusy(id + kind);
     try {
-      if (kind === "reject") await post(`/api/transient/candidates/${id}/reject`, { actor: "console" });
-      else await post(`/api/transient/candidates/${id}/approve`, { action: kind, actor: "console" });
+      if (kind === "reject" || kind === "reset") {
+        await post(`/api/transient/candidates/${id}/${kind}`, { actor: "console" });
+      } else {
+        await post(`/api/transient/candidates/${id}/approve`, {
+          action: kind,
+          actor: "console",
+          recipe: [{ exptime_s: opts?.exptime ?? 120, count: opts?.count ?? 1 }],
+          scheduled_utc: opts?.scheduled_utc ?? null,
+          launch: opts?.launch ?? false,
+        });
+      }
       await refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));

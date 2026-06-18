@@ -19,6 +19,7 @@ from ..core.db import _utcnow
 from ..core.transient_db import (
     BlockState,
     Candidate,
+    CandidateState,
     ExecutionBlock,
     ExecutionStep,
     ObservationRequest,
@@ -80,7 +81,8 @@ class RequestBuilder:
                 })
         return steps
 
-    async def build(self, candidate: dict, action: str, recipe=None, created_by="console") -> dict:
+    async def build(self, candidate: dict, action: str, recipe=None, created_by="console",
+                    scheduled_utc=None) -> dict:
         """Create the request + execution block + steps for an approved candidate."""
         mode = RunMode.AUTO.value if action == "execute" else RunMode.ATTENDED.value
         recipe = recipe or self.default_recipe()
@@ -103,6 +105,7 @@ class RequestBuilder:
             )).scalar_one() + 1
             block = ExecutionBlock(id=_uid(), request_id=rid,
                                    state=BlockState.QUEUED.value, seq=next_seq,
+                                   scheduled_utc=scheduled_utc or None,
                                    total_steps=len(steps))
             for st in steps:
                 st.block_id = block.id
@@ -144,10 +147,37 @@ class RequestBuilder:
             return [r.dict() for r in rows]
 
     async def reorder_queue(self, block_ids: list[str]) -> list[dict]:
+        """Persist a new queue order (seq) — applies to all active blocks so manual
+        ordering sticks across refreshes."""
         async with self.sm() as session:
             for i, bid in enumerate(block_ids):
                 b = await session.get(ExecutionBlock, bid)
-                if b and b.state == BlockState.QUEUED.value:
+                if b:
                     b.seq = i
             await session.commit()
         return await self.list_queue()
+
+    async def cancel_block(self, block_id: str) -> dict:
+        """Remove a block from the queue. A queued/paused block is aborted; the caller
+        aborts the running one through the executor."""
+        async with self.sm() as session:
+            b = await session.get(ExecutionBlock, block_id)
+            if not b:
+                raise KeyError(block_id)
+            running = b.state == BlockState.RUNNING.value
+            if b.state in (BlockState.QUEUED.value, BlockState.PAUSED.value):
+                b.state = BlockState.ABORTED.value
+                b.ended_at = _utcnow()
+                req = await session.get(ObservationRequest, b.request_id)
+                if req:
+                    req.state = RequestState.CANCELLED.value
+                    # reset the candidate so it can be queued/executed again
+                    cand = await session.get(Candidate, req.candidate_id)
+                    if cand and cand.state in (CandidateState.APPROVED_QUEUE.value,
+                                               CandidateState.APPROVED_EXECUTE.value):
+                        cand.state = CandidateState.NEW.value
+                        cand.decided_at = None
+                        cand.decided_by = None
+                        cand.request_id = None
+                await session.commit()
+            return {"id": block_id, "state": b.state, "running": running}

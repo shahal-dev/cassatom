@@ -161,6 +161,7 @@ class ExecutionBlock(_DictMixin, Base):
     request_id: Mapped[str] = mapped_column(String, index=True)
     state: Mapped[str] = mapped_column(String, default=BlockState.QUEUED.value, index=True)
     seq: Mapped[int] = mapped_column(Integer, default=0)
+    scheduled_utc: Mapped[str | None] = mapped_column(String, nullable=True)  # run at this time
     current_step: Mapped[int] = mapped_column(Integer, default=0)
     total_steps: Mapped[int] = mapped_column(Integer, default=0)
     n_done: Mapped[int] = mapped_column(Integer, default=0)
@@ -204,6 +205,7 @@ class Plan(_DictMixin, Base):
     repeat: Mapped[int] = mapped_column(Integer, default=1)
     autofocus: Mapped[bool] = mapped_column(Boolean, default=False)
     center: Mapped[bool] = mapped_column(Boolean, default=False)   # plate-solve center (stub)
+    scheduled_utc: Mapped[str | None] = mapped_column(String, nullable=True)  # ISO UTC; auto-run at this time
     source: Mapped[str | None] = mapped_column(String, nullable=True)  # "manual" | "candidate:<id>" | "queue:<block>"
     last_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
     last_block_id: Mapped[str | None] = mapped_column(String, nullable=True)

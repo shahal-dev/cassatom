@@ -162,6 +162,53 @@ def compute_night(
     )
 
 
+def observability(
+    ra_deg: float,
+    dec_deg: float,
+    night: NightWindow,
+    location: EarthLocation,
+    alt_min: float = 30.0,
+    best_min: float = 60.0,
+) -> dict:
+    """Rich tonight's-observability for a target: the dark-time window it spends above
+    ``alt_min`` (observable), above ``best_min`` (best), its peak altitude + time, and
+    closest moon separation. All windows are within tonight's astronomical-dark window.
+    """
+    times = night.times
+    frame = AltAz(obstime=times, location=location)
+    target = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+    alt = np.asarray(target.transform_to(frame).alt.deg)
+    kmax = int(np.argmax(alt))
+    max_alt = float(alt[kmax])
+
+    def _win(thr: float):
+        idx = np.where(alt >= thr)[0]
+        if not len(idx):
+            return None, None
+        return times[idx[0]].isot + "Z", times[idx[-1]].isot + "Z"
+
+    obs_s, obs_e = _win(alt_min)
+    best_s, best_e = _win(best_min)
+    idx = np.where(alt >= alt_min)[0]
+    moon_sep = (round(float(np.min(target.separation(night.moon[idx]).deg)), 1)
+                if len(idx) and night.moon is not None else None)
+    return {
+        "observable": max_alt >= alt_min,
+        "alt_min": alt_min,
+        "best_min": best_min,
+        "window_start_utc": obs_s,
+        "window_end_utc": obs_e,
+        "best_start_utc": best_s,
+        "best_end_utc": best_e,
+        "max_alt_deg": round(max_alt, 1),
+        "max_alt_utc": times[kmax].isot + "Z",
+        "moon_sep_deg": moon_sep,
+        "night_start_utc": night.start_utc + "Z",
+        "night_end_utc": night.end_utc + "Z",
+        "twilight_used": night.twilight_used,
+    }
+
+
 def visibility(
     ra_deg: float,
     dec_deg: float,

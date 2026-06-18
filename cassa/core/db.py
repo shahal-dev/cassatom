@@ -86,6 +86,27 @@ class DB:
     async def init(self) -> None:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(self._add_missing_columns)
+
+    @staticmethod
+    def _add_missing_columns(conn) -> None:
+        """Additive migration for SQLite: add columns introduced after a table was
+        first created (create_all won't alter an existing table). Postgres cutover
+        will replace this with real migrations."""
+        from sqlalchemy import inspect, text
+        wanted = {
+            "plan": [("scheduled_utc", "VARCHAR")],
+            "execution_block": [("scheduled_utc", "VARCHAR")],
+        }
+        insp = inspect(conn)
+        tables = set(insp.get_table_names())
+        for table, cols in wanted.items():
+            if table not in tables:
+                continue
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for name, sqltype in cols:
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sqltype}"))
 
     async def dispose(self) -> None:
         await self.engine.dispose()

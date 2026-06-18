@@ -1,0 +1,71 @@
+# CASSA observatory definition — CIAO (second site).
+# Run a backend with this file:  CASSA_OBSERVATORY_FILE=observatory-ciao.yaml
+# See start-ciao.sh. Use the SAME CASSA_AUTH_SECRET as the other site so one login
+# works across both.
+
+id: ciao
+name: CASSA IUB Astronomical Observatory
+observer: CASSA
+instrument_id: ciao-main
+status: online
+
+# --- Site conditions ---------------------------------------------------------
+# Live weather comes from the weather API / INDI device; only seeing is manual.
+weather:
+  seeing: Good
+
+# --- Telescopes at this site ------------------------------------------------
+telescopes:
+  - id: planewave
+    name: PlaneWave CDK + SBIG
+    indi:
+      host: localhost
+      port: 7625          # CIAO's own INDI server (distinct from the rooftop's 7624)
+
+# --- Geographic location ----------------------------------------------------
+# Kaliakair, Gazipur. TODO: confirm with a GPS reading at the pier — these are
+# approximate for Kaliakair Upazila.
+location:
+  latitude_deg: 24.0667      # +N  (Kaliakair, Gazipur)
+  longitude_deg: 90.2167     # +E
+  elevation_m: 15
+  timezone: Asia/Dhaka
+  utc_offset_hours: 6.0
+
+# --- INDI server (edge node cabled to the instruments) ----------------------
+indi:
+  host: localhost
+  port: 7625
+
+# --- Equipment on the pier --------------------------------------------------
+# Descriptive (documents the rig + feeds FITS provenance + plate-solve FOV).
+# Verify the exact INDI device labels + drivers with the console's Scan; the
+# driver names below are typical but depend on your INDI build / PWI4 setup.
+equipment:
+  mount:
+    name: PlaneWave L-350 Direct Drive
+    indi_device: PlaneWave Mount        # TODO: confirm via Scan
+    driver: indi_planewave_mount        # TODO: confirm (PlaneWave/PWI4 driver)
+
+  telescope:
+    name: PlaneWave CDK14
+    aperture_mm: 356
+    focal_length_mm: 2563               # f/7.2 — used for plate-solve FOV
+
+  cameras:
+    - role: camera                      # science camera
+      name: SBIG STF-8300M
+      indi_device: SBIG CCD             # TODO: confirm via Scan
+      driver: indi_sbig_ccd
+      sensor: KAF-8300
+      pixel_size_um: 5.4                # TODO: confirm for your SBIG model
+
+  focuser:
+    name: PlaneWave EFA
+    indi_device: PlaneWave EFA          # TODO: confirm via Scan
+    driver: indi_efa_focuser            # TODO: confirm
+
+  filter_wheel:
+    name: SBIG filter wheel
+    driver: indi_sbig_ccd
+    filters: []                         # TODO: slot labels in order, e.g. [L, R, G, B]

@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { ExposureSet, Plan, QueueBlock, ResolveResult, Telemetry, del, getJSON, post } from "./api";
+import VisibilityAlert from "./VisibilityAlert";
+
+// UTC ISO (stored) <-> datetime-local input value (browser local time)
+const toLocalInput = (utcIso: string | null): string => {
+  if (!utcIso) return "";
+  const d = new Date(utcIso);
+  return isNaN(d.getTime()) ? "" : new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+const toUtcIso = (local: string): string | null => {
+  if (!local) return null;
+  const d = new Date(local);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+};
 
 const blankSet = (image_type = "LIGHT"): ExposureSet => ({
   filter_slot: null,
@@ -21,6 +34,7 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
   const [repeat, setRepeat] = useState("1");
   const [autofocus, setAutofocus] = useState(false);
   const [center, setCenter] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState(""); // datetime-local (browser tz)
   const [lastBlockId, setLastBlockId] = useState<string | null>(null);
 
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -45,7 +59,7 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
   const newPlan = () => {
     setId(null); setName("New plan"); setObjectName(""); setRaHours(""); setDecDeg("");
     setRecipe([blankSet()]); setRepeat("1"); setAutofocus(false); setCenter(false);
-    setLastBlockId(null); setMsg(null); setErr(null);
+    setScheduledAt(""); setLastBlockId(null); setMsg(null); setErr(null);
   };
 
   const loadPlan = (p: Plan) => {
@@ -54,6 +68,7 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
     setDecDeg(p.dec_deg != null ? p.dec_deg.toFixed(4) : "");
     setRecipe(p.recipe_json && p.recipe_json.length ? p.recipe_json.map((e) => ({ ...e })) : [blankSet()]);
     setRepeat(String(p.repeat)); setAutofocus(p.autofocus); setCenter(p.center);
+    setScheduledAt(toLocalInput(p.scheduled_utc));
     setLastBlockId(p.last_block_id); setMsg(null); setErr(null);
   };
 
@@ -87,7 +102,7 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
   const setRow = (i: number, patch: Partial<ExposureSet>) =>
     setRecipe((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
-  const payload = () => ({
+  const payload = (scheduledIso: string | null = toUtcIso(scheduledAt)) => ({
     id: id ?? undefined,
     name: name.trim() || "Untitled plan",
     object_name: objectName.trim(),
@@ -97,13 +112,15 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
     repeat: Math.max(1, parseInt(repeat) || 1),
     autofocus,
     center,
+    scheduled_utc: scheduledIso,
     source: id ? undefined : "manual",
   });
 
-  const save = async (): Promise<Plan | null> => {
+  const save = async (scheduledIso?: string | null): Promise<Plan | null> => {
     setErr(null);
     try {
-      const saved = (await post("/api/transient/plans", payload())) as Plan;
+      const body = scheduledIso === undefined ? payload() : payload(scheduledIso);
+      const saved = (await post("/api/transient/plans", body)) as Plan;
       setId(saved.id);
       setLastBlockId(saved.last_block_id);
       setMsg(`saved "${saved.name}"`);
@@ -115,11 +132,21 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
     }
   };
 
+  const schedule = async () => {
+    if (!scheduledAt) return;
+    setBusy(true);
+    const saved = await save();
+    setBusy(false);
+    if (saved) setMsg(`⏰ scheduled for ${new Date(scheduledAt).toLocaleString()}`);
+  };
+
   const run = async (resume: boolean) => {
     setBusy(true);
     setErr(null);
     try {
-      const saved = await save();
+      // running now cancels any pending schedule so it doesn't fire again later
+      const saved = await save(resume ? undefined : null);
+      if (!resume) setScheduledAt("");
       if (!saved) return;
       const res = (await post(`/api/transient/plans/${saved.id}/run?resume=${resume}`)) as {
         block_id: string;
@@ -176,6 +203,9 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
                 </select>
               </label>
             </div>
+            {raHours.trim() !== "" && decDeg.trim() !== "" && !isNaN(parseFloat(raHours)) && !isNaN(parseFloat(decDeg)) && (
+              <VisibilityAlert raHours={parseFloat(raHours)} decDeg={parseFloat(decDeg)} />
+            )}
           </section>
 
           <section className="card">
@@ -233,11 +263,24 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
           {msg && <div className="muted" style={{ padding: "0 4px" }}>{msg}</div>}
 
           <section className="card">
+            <h2>Run</h2>
             <div className="row">
-              <button onClick={save} disabled={busy}>Save plan</button>
-              <button className="active" onClick={() => run(false)} disabled={busy}>Run</button>
+              <button className="active" onClick={() => run(false)} disabled={busy}>Run now</button>
               <button onClick={() => run(true)} disabled={busy || !lastBlockId} title={lastBlockId ? "Resume the last run, skipping completed shots" : "Run once first"}>Resume</button>
+              <button onClick={() => save()} disabled={busy} title="Save the plan to run later">Save for later</button>
             </div>
+            <div className="row">
+              <label>Run at (local time)
+                <input type="datetime-local" style={{ width: "auto" }} value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+              </label>
+              <button onClick={schedule} disabled={busy || !scheduledAt}>⏰ Schedule</button>
+              {scheduledAt && <button className="small danger" onClick={() => save(null).then(() => setScheduledAt(""))}>clear schedule</button>}
+            </div>
+            {scheduledAt && (
+              <div className="muted" style={{ marginTop: 6 }}>
+                will run automatically at <b style={{ color: "#fff" }}>{new Date(scheduledAt).toLocaleString()}</b>
+              </div>
+            )}
           </section>
         </div>
 
@@ -252,6 +295,7 @@ export default function PlanPage({ tel }: { tel: Telemetry | null }) {
                   <b style={{ color: "#fff" }}>{p.name}</b>
                   {p.object_name && <span className="pill idle">{p.object_name}</span>}
                   <span className="muted">{(p.recipe_json ?? []).reduce((a, r) => a + (r.count || 0), 0) * p.repeat} shots</span>
+                  {p.scheduled_utc && <span className="pill warn" title="Scheduled">⏰ {new Date(p.scheduled_utc).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
                   {p.last_block_id && <span className="pill ok">run</span>}
                 </div>
                 <div className="row">

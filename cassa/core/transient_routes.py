@@ -19,6 +19,8 @@ router = APIRouter(prefix="/api/transient", tags=["transient"])
 class ApproveReq(BaseModel):
     action: str = Field(pattern="^(queue|execute)$")
     recipe: list | None = None
+    scheduled_utc: str | None = None   # optional start time (ISO UTC); queue runs at this time
+    launch: bool = False               # execute now: launch the block immediately
     actor: str = "console"
 
 
@@ -48,6 +50,7 @@ class PlanReq(BaseModel):
     repeat: int = Field(default=1, ge=1)
     autofocus: bool = False
     center: bool = False
+    scheduled_utc: str | None = None   # ISO UTC; auto-run at this time (None = run manually)
     source: str | None = "manual"
 
 
@@ -100,13 +103,26 @@ async def get_candidate(request: Request, cand_id: str):
 @router.post("/candidates/{cand_id}/approve")
 async def approve_candidate(request: Request, cand_id: str, req: ApproveReq):
     try:
-        return await request.app.state.candidates.approve(
-            cand_id, req.action, req.actor, req.recipe
+        result = await request.app.state.candidates.approve(
+            cand_id, req.action, req.actor, req.recipe, scheduled_utc=req.scheduled_utc
         )
     except KeyError:
         raise HTTPException(404, "candidate not found")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # "execute now" → launch the created block immediately
+    if req.launch and result.get("block_id"):
+        request.app.state.executor.launch(result["block_id"])
+    return result
+
+
+@router.post("/candidates/{cand_id}/reset")
+async def reset_candidate(request: Request, cand_id: str, req: RejectReq):
+    """Re-open a decided candidate so its Queue/Execute buttons work again."""
+    try:
+        return await request.app.state.candidates.reset(cand_id, req.actor)
+    except KeyError:
+        raise HTTPException(404, "candidate not found")
 
 
 @router.post("/candidates/{cand_id}/reject")
@@ -153,6 +169,17 @@ async def list_queue(request: Request):
 @router.post("/queue/reorder")
 async def reorder_queue(request: Request, req: ReorderReq):
     return await request.app.state.requests.reorder_queue(req.block_ids)
+
+
+@router.delete("/queue/{block_id}")
+async def cancel_queue_block(request: Request, block_id: str):
+    """Remove a block from the queue (abort it if it's currently running)."""
+    try:
+        res = await request.app.state.requests.cancel_block(block_id)
+    except KeyError:
+        raise HTTPException(404, "block not found")
+    await request.app.state.executor.cancel(block_id)
+    return {"ok": True, **res}
 
 
 # ----------------------------------------------------------------- executor

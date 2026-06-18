@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityEvent, ResolveResult, Telemetry, getJSON, post } from "./api";
+import Almanac from "./Almanac";
 import AutofocusPlot from "./AutofocusPlot";
+import VisibilityAlert from "./VisibilityAlert";
 import CameraCard from "./CameraCard";
 import ConfirmBanner from "./ConfirmBanner";
 import GuidingPlot from "./GuidingPlot";
@@ -164,6 +166,7 @@ export default function LiveControl({
         {tel?.executor && tel.executor.state !== "idle" && (
           <span className="pill warn">observing: {tel.executor.object}</span>
         )}
+        <Almanac />
       </section>
 
       {err && <div className="err">{err}</div>}
@@ -208,6 +211,7 @@ export default function LiveControl({
               <label>Dec (°)<input value={dec} placeholder="—" onChange={(e) => setDec(e.target.value)} /></label>
               <button className="small" disabled={!coordsValid} onClick={() => setRecenter((n) => n + 1)} title="Center map on these coordinates">Center</button>
             </div>
+            {coordsValid && <VisibilityAlert raHours={parseFloat(ra)} decDeg={parseFloat(dec)} />}
             <div className="row">
               <button className="active" disabled={!coordsValid} onClick={() => call(() => post("/api/mount/slew", { ra_hours: parseFloat(ra), dec_deg: parseFloat(dec), track: true }))}>Slew to target</button>
               <button disabled={!coordsValid} onClick={() => call(() => post("/api/mount/sync", { ra_hours: parseFloat(ra), dec_deg: parseFloat(dec) }))}>Sync</button>

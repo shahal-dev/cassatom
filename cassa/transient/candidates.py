@@ -18,8 +18,12 @@ from ..core.db import _utcnow
 from ..core.transient_db import (
     Alert,
     AuditEvent,
+    BlockState,
     Candidate,
     CandidateState,
+    ExecutionBlock,
+    ObservationRequest,
+    RequestState,
 )
 from . import visibility as vis
 
@@ -181,7 +185,8 @@ class CandidateService:
         session.add(AuditEvent(actor=actor, action=action, entity_type=entity_type,
                                entity_id=entity_id, detail_json=detail, result=result))
 
-    async def approve(self, cand_id: str, action: str, actor: str, recipe=None) -> dict:
+    async def approve(self, cand_id: str, action: str, actor: str, recipe=None,
+                      scheduled_utc=None) -> dict:
         """action: 'queue' (attended) or 'execute' (run now / auto)."""
         if action not in ("queue", "execute"):
             raise ValueError(f"unknown approve action {action!r}")
@@ -205,7 +210,7 @@ class CandidateService:
         if self.request_builder:
             try:
                 req = await self.request_builder.build(cand_dict, action=action, recipe=recipe,
-                                                       created_by=actor)
+                                                       created_by=actor, scheduled_utc=scheduled_utc)
                 async with self.sm() as session:
                     cand = await session.get(Candidate, cand_id)
                     cand.request_id = req["id"]
@@ -224,5 +229,33 @@ class CandidateService:
             cand.decided_at = _utcnow()
             cand.decided_by = actor
             await self._audit(session, actor, "reject", "candidate", cand_id)
+            await session.commit()
+            return cand.dict()
+
+    async def reset(self, cand_id: str, actor: str = "console") -> dict:
+        """Re-open a decided candidate (approved/rejected) back to NEW so it can be
+        queued/executed again; aborts any still-active block it created."""
+        async with self.sm() as session:
+            cand = await session.get(Candidate, cand_id)
+            if not cand:
+                raise KeyError(cand_id)
+            old_req = cand.request_id
+            cand.state = CandidateState.NEW.value
+            cand.decided_at = None
+            cand.decided_by = None
+            cand.request_id = None
+            await self._audit(session, actor, "reset", "candidate", cand_id)
+            if old_req:
+                blocks = (await session.execute(
+                    select(ExecutionBlock).where(
+                        ExecutionBlock.request_id == old_req,
+                        ExecutionBlock.state.in_([BlockState.QUEUED.value, BlockState.PAUSED.value]),
+                    ))).scalars().all()
+                for b in blocks:
+                    b.state = BlockState.ABORTED.value
+                    b.ended_at = _utcnow()
+                req = await session.get(ObservationRequest, old_req)
+                if req:
+                    req.state = RequestState.CANCELLED.value
             await session.commit()
             return cand.dict()

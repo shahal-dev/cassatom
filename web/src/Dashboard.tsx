@@ -18,6 +18,12 @@ function weatherIcon(cond?: string | null): string {
   return "🔭";
 }
 
+function fmtT(iso: string | null, tz?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("en-GB", { timeZone: tz || undefined, hour: "2-digit", minute: "2-digit" });
+}
+
 export default function Dashboard({
   onOperate,
 }: {
@@ -77,6 +83,14 @@ export default function Dashboard({
                 <span>{weatherIcon(info.weather.condition)} {info.weather.condition ?? "—"}</span>
                 {info.weather.seeing && <span className="muted">seeing {info.weather.seeing}</span>}
                 {info.weather.humidity != null && <span className="muted">humidity {info.weather.humidity}%</span>}
+              </div>
+            )}
+
+            {info?.night && (
+              <div className="weatherrow">
+                <span title={info.night.moon_phase}>{info.night.moon_emoji} {Math.round(info.night.moon_illum * 100)}%</span>
+                <span className="muted">{info.night.is_dark ? "🌌 astro dark" : "🌇 not dark"}</span>
+                <span className="muted" title="Astronomical night">🔭 {fmtT(info.night.astro_dusk, info.night.timezone)}→{fmtT(info.night.astro_dawn, info.night.timezone)}</span>
               </div>
             )}
 

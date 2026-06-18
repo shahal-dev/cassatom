@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
   DashTelescope, ImageRec, SiteRef, Telemetry,
   atLeast, clearAuth, getJSON, getRole, getUsername, isAuthed, mediaUrl, post, setApiBase, wsUrl,
 } from "./api";
+import BottomTerminal from "./BottomTerminal";
 import Candidates from "./Candidates";
 import Dashboard from "./Dashboard";
 import Devices from "./Devices";
@@ -12,15 +14,36 @@ import Login from "./Login";
 import PlanPage from "./PlanPage";
 import Users from "./Users";
 
-type Tab = "dashboard" | "console" | "candidates" | "plan" | "observing" | "users";
+type Active = { site: SiteRef; telescope: DashTelescope };
+
+function loadActive(): Active | null {
+  try {
+    const s = localStorage.getItem("cassa_active");
+    if (s) {
+      const a = JSON.parse(s) as Active;
+      setApiBase(a.site.url);
+      return a;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 export default function App() {
+  const navigate = useNavigate();
+  const onDashboard = useLocation().pathname === "/";
   const [authed, setAuthed] = useState(isAuthed());
   const [tel, setTel] = useState<Telemetry | null>(null);
   const [wsOk, setWsOk] = useState(false);
-  const [tab, setTab] = useState<Tab>("dashboard");
   const [images, setImages] = useState<ImageRec[]>([]);
-  const [active, setActive] = useState<{ site: SiteRef; telescope: DashTelescope } | null>(null);
+  const [active, setActiveState] = useState<Active | null>(loadActive);
+
+  const setActive = (a: Active | null) => {
+    setActiveState(a);
+    if (a) localStorage.setItem("cassa_active", JSON.stringify(a));
+    else localStorage.removeItem("cassa_active");
+  };
 
   // validate a stored token on load
   useEffect(() => {
@@ -29,6 +52,14 @@ export default function App() {
       clearAuth();
       setAuthed(false);
     });
+  }, []);
+
+  // restore: reconnect the backend to the persisted telescope on first load
+  useEffect(() => {
+    if (active) {
+      post("/api/indi/server", { host: active.telescope.indi_host, port: active.telescope.indi_port }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshArchive = useCallback(async () => {
@@ -75,27 +106,55 @@ export default function App() {
     setApiBase(site.url);
     post("/api/indi/server", { host: telescope.indi_host, port: telescope.indi_port }).catch(() => {});
     setActive({ site, telescope });
-    setTab("console");
+    navigate("/console");
   };
 
   const logout = () => {
     clearAuth();
     setActive(null);
     setAuthed(false);
+    navigate("/");
   };
 
-  const needSite = !active && tab !== "dashboard" && tab !== "users";
+  // operational pages require a selected telescope
+  const requireScope = (el: JSX.Element) => (active ? el : <Navigate to="/" replace />);
+
+  const consolePage = (
+    <>
+      <Devices tel={tel} />
+      <LiveControl tel={tel} onCapture={refreshArchive} />
+      <section className="card archive">
+        <h2>
+          Archive <button className="small" onClick={refreshArchive}>refresh</button>
+        </h2>
+        {!images.length && <div className="muted">no images archived yet</div>}
+        <div className="thumbs">
+          {images.map((im) => (
+            <div className="thumb" key={im.id} title={im.obsid}>
+              <img src={mediaUrl(`/api/images/${im.id}/thumb.png`)} alt={im.obsid} />
+              <div className="meta">
+                <b>{im.object_name || im.image_type}</b>
+                <span>{im.image_type} · {im.filter ?? "—"} · {im.exptime}s</span>
+                <span className="muted">{im.date_obs.replace("T", " ").slice(0, 19)}</span>
+                <a href={mediaUrl(`/api/images/${im.id}/fits`)}>FITS ↓</a>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
+  );
 
   return (
     <div className="app">
       <header>
-        <img src="/logo.png" className="logo" alt="CASSA" onClick={() => setTab("dashboard")} />
-        {active && (
+        <img src="/logo.png" className="logo" alt="CASSA" onClick={() => navigate("/")} />
+        {!onDashboard && active && (
           <span className="muted" style={{ fontSize: 12 }}>
             {active.site.name} · {active.telescope.name}
           </span>
         )}
-        {active && (
+        {!onDashboard && active && (
           <>
             <span className={`pill ${wsOk ? "ok" : "bad"}`}>{wsOk ? "live" : "offline"}</span>
             <span className={`pill ${tel?.indi_connected ? "ok" : "bad"}`}>
@@ -111,61 +170,33 @@ export default function App() {
             )}
           </>
         )}
-        <nav className="tabs">
-          <button className={tab === "dashboard" ? "active" : ""} onClick={() => setTab("dashboard")}>Dashboard</button>
-          <button className={tab === "console" ? "active" : ""} onClick={() => setTab("console")}>Console</button>
-          <button className={tab === "candidates" ? "active" : ""} onClick={() => setTab("candidates")}>Candidates</button>
-          <button className={tab === "plan" ? "active" : ""} onClick={() => setTab("plan")}>Plan</button>
-          <button className={tab === "observing" ? "active" : ""} onClick={() => setTab("observing")}>Observe</button>
-          {atLeast("admin") && (
-            <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>Users</button>
-          )}
-        </nav>
-        <span className="muted" style={{ fontSize: 12, marginLeft: 10 }}>{getUsername()} · {getRole()}</span>
+        {!onDashboard && (
+          <nav className="tabs">
+            <NavLink to="/" end>Dashboard</NavLink>
+            {active && <NavLink to="/console">Console</NavLink>}
+            {active && <NavLink to="/candidates">Candidates</NavLink>}
+            {active && <NavLink to="/plan">Plan</NavLink>}
+            {active && <NavLink to="/observe">Observe</NavLink>}
+            {atLeast("admin") && <NavLink to="/users">Users</NavLink>}
+          </nav>
+        )}
+        <span className="muted" style={{ fontSize: 12, marginLeft: onDashboard ? "auto" : 10 }}>{getUsername()} · {getRole()}</span>
         <button className="small" onClick={logout}>Logout</button>
       </header>
 
-      {tab === "dashboard" && <Dashboard onOperate={onOperate} />}
-      {tab === "users" && atLeast("admin") && <Users />}
-
-      {needSite && (
-        <div className="muted" style={{ padding: 24 }}>
-          Select a telescope from the <b>Dashboard</b> to operate it.
-        </div>
-      )}
-
-      {!needSite && tab === "candidates" && <Candidates />}
-      {!needSite && tab === "plan" && <PlanPage tel={tel} />}
-      {!needSite && tab === "observing" && <ExecutionMonitor tel={tel} />}
-
-      {!needSite && tab === "console" && (
-        <>
-          <Devices tel={tel} />
-          <LiveControl tel={tel} onCapture={refreshArchive} />
-
-          <section className="card archive">
-            <h2>
-              Archive <button className="small" onClick={refreshArchive}>refresh</button>
-            </h2>
-            {!images.length && <div className="muted">no images archived yet</div>}
-            <div className="thumbs">
-              {images.map((im) => (
-                <div className="thumb" key={im.id} title={im.obsid}>
-                  <img src={mediaUrl(`/api/images/${im.id}/thumb.png`)} alt={im.obsid} />
-                  <div className="meta">
-                    <b>{im.object_name || im.image_type}</b>
-                    <span>{im.image_type} · {im.filter ?? "—"} · {im.exptime}s</span>
-                    <span className="muted">{im.date_obs.replace("T", " ").slice(0, 19)}</span>
-                    <a href={mediaUrl(`/api/images/${im.id}/fits`)}>FITS ↓</a>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        </>
-      )}
+      <Routes>
+        <Route path="/" element={<Dashboard onOperate={onOperate} />} />
+        <Route path="/console" element={requireScope(consolePage)} />
+        <Route path="/candidates" element={requireScope(<Candidates />)} />
+        <Route path="/plan" element={requireScope(<PlanPage tel={tel} />)} />
+        <Route path="/observe" element={requireScope(<ExecutionMonitor tel={tel} />)} />
+        <Route path="/users" element={atLeast("admin") ? <Users /> : <Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
 
       <footer>{active ? `last update ${tel?.ts ?? "—"}` : "CASSA · select a location"}</footer>
+
+      {active && <BottomTerminal tel={tel} />}
     </div>
   );
 }

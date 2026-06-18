@@ -78,6 +78,12 @@ class ExecutionSequencer:
         self._pause = False
         self.manual_override = False
 
+    async def cancel(self, block_id: str) -> None:
+        """Drop a block from the queue; abort it if it's the one running."""
+        self._launched.discard(block_id)
+        if self.progress.get("block_id") == block_id:
+            await self.abort()
+
     async def abort(self) -> None:
         self._abort_block = True
         dm = self.app.state.dm
@@ -162,16 +168,31 @@ class ExecutionSequencer:
                 .order_by(ExecutionBlock.seq)
             )).scalars().all()
             for b in blocks:
-                if b.id in self._launched:                        # attended launch
-                    if safety is None or safety.ok_to_dispatch("attended"):
+                ok_attended = safety is None or safety.ok_to_dispatch("attended")
+                if b.id in self._launched:                        # manual launch
+                    if ok_attended:
                         return b.id
                     continue                                      # launched but unsafe → hold
+                if b.scheduled_utc:                               # timed queue: run at start time
+                    if self._due(b.scheduled_utc) and ok_attended:
+                        return b.id
+                    continue                                      # not due yet (or unsafe) → hold
                 req = await s.get(ObservationRequest, b.request_id)
                 if (req and req.mode == RunMode.AUTO.value and self.s.auto_execute
                         and self._within_window(req)
                         and (safety is None or safety.ok_to_dispatch("auto"))):
                     return b.id                                   # guarded auto-dispatch
         return None
+
+    @staticmethod
+    def _due(scheduled_utc: str) -> bool:
+        try:
+            when = dt.datetime.fromisoformat(scheduled_utc.replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=dt.timezone.utc)
+        except (ValueError, AttributeError):
+            return False
+        return when <= dt.datetime.now(dt.timezone.utc)
 
     # --------------------------------------------------------------- run block
     async def _run_block(self, block_id: str) -> None:

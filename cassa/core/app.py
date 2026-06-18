@@ -11,6 +11,7 @@ import logging
 import pathlib
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -129,6 +130,27 @@ async def _broadcaster(app: FastAPI) -> None:
                 clients.discard(ws)
 
 
+async def _plan_scheduler(app: FastAPI) -> None:
+    """Fire plans whose scheduled time has arrived (run + launch, then clear)."""
+    while True:
+        await asyncio.sleep(20)
+        try:
+            for p in await app.state.plans.due_plans():
+                try:
+                    res = await app.state.plans.run_plan(p["id"])
+                    app.state.executor.launch(res["block_id"])
+                    await app.state.plans.clear_schedule(p["id"])
+                    app.state.activity.push(f"⏰ scheduled plan '{p['name']}' launched", "exec")
+                    log.info("scheduled plan %s launched → block %s", p["id"], res["block_id"])
+                except Exception:
+                    log.exception("failed to launch scheduled plan %s", p.get("id"))
+                    await app.state.plans.clear_schedule(p["id"])  # don't retry-loop a bad plan
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("plan scheduler error")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings, observatory = load_settings()
@@ -180,6 +202,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_broadcaster(app)),
         asyncio.create_task(app.state.poller.run()),
         asyncio.create_task(app.state.executor.run()),
+        asyncio.create_task(_plan_scheduler(app)),
     ]
     log.info("CASSA core ready — INDI %s:%s, db=%s", settings.indi_host,
              settings.indi_port, settings.db_url)
@@ -397,6 +420,18 @@ async def site():
         "source": live.get("source"),
     }
     safety = app.state.safety.snapshot() if hasattr(app.state, "safety") else None
+    alm = await _almanac_cached()
+    night = None
+    if alm.get("available"):
+        night = {
+            "is_dark": alm["is_dark"],
+            "astro_dusk": alm["astronomical_night"]["start"],
+            "astro_dawn": alm["astronomical_night"]["end"],
+            "moon_illum": alm["moon"]["illumination"],
+            "moon_phase": alm["moon"]["phase"],
+            "moon_emoji": alm["moon"]["emoji"],
+            "timezone": alm.get("timezone"),
+        }
     return {
         "id": obs.id,
         "name": obs.name,
@@ -404,6 +439,7 @@ async def site():
         "status": obs.status,
         "weather": weather if any(v is not None for v in weather.values()) else None,
         "safety": safety["state"] if safety else None,
+        "night": night,
         "telescopes": tels,
         "indi_connected": bool(snap.get("indi_connected")),
     }
@@ -523,6 +559,135 @@ async def sky_bodies():
         return _BODIES_CACHE["data"]
     data = await asyncio.to_thread(_compute_bodies, app.state.observatory.location)
     _BODIES_CACHE.update(t=now, data=data)
+    return data
+
+
+_ALMANAC_CACHE = {"t": 0.0, "data": None}
+
+
+async def _almanac_cached() -> dict:
+    """Tonight's sun/twilight/moon almanac for the site (cached ~5 min)."""
+    now = time.time()
+    if _ALMANAC_CACHE["data"] is None or now - _ALMANAC_CACHE["t"] > 300:
+        from ..transient.almanac import almanac
+        loc = app.state.observatory.location
+        data = await asyncio.to_thread(almanac, loc, None, loc.utc_offset_hours, loc.timezone)
+        _ALMANAC_CACHE.update(t=now, data=data)
+    return _ALMANAC_CACHE["data"]
+
+
+@app.get("/api/sky/almanac")
+async def sky_almanac():
+    """Sunset/twilight/astronomical-night times + moon phase/rise/set (cached)."""
+    return await _almanac_cached()
+
+
+_NIGHT_CACHE = {"ut_date": None, "night": None}
+
+
+async def _night_cached():
+    """Tonight's NightWindow (dark grid), recomputed only when the night rolls over."""
+    from ..transient.visibility import compute_night, night_label, site_location
+    loc = app.state.observatory.location
+    if not loc.is_set:
+        return None, None
+    now = datetime.now(timezone.utc)
+    label = night_label(now, loc.utc_offset_hours)
+    el = site_location(loc)
+    if _NIGHT_CACHE["ut_date"] != label:
+        night = await asyncio.to_thread(compute_night, el, now, loc.utc_offset_hours)
+        _NIGHT_CACHE.update(ut_date=label, night=night)
+    return _NIGHT_CACHE["night"], el
+
+
+def _recipe_summary(recipe, repeat: int = 1) -> tuple[int, float]:
+    """(total light/exposure count, representative exposure seconds) for a recipe."""
+    recipe = recipe or []
+    count = int(repeat) * sum(int(e.get("count", 1)) for e in recipe)
+    lights = [float(e.get("exptime_s", 0) or 0) for e in recipe
+              if (e.get("image_type") or "LIGHT").upper() == "LIGHT"]
+    exptime = lights[0] if lights else (float(recipe[0].get("exptime_s", 0) or 0) if recipe else 0.0)
+    return count, exptime
+
+
+@app.get("/api/transient/tonight")
+async def transient_tonight():
+    """The queue enriched with tonight's observability + sorted for the night: items
+    with a set start time go by that time; the rest are ordered by their best time to
+    observe (≥60° window). Non-observable items fall to the bottom, flagged."""
+    loc = app.state.observatory.location
+    if not loc.is_set:
+        return {"available": False, "timezone": None, "targets": []}
+    night, el = await _night_cached()
+    if night is None:
+        return {"available": False, "timezone": loc.timezone, "targets": []}
+    from ..transient.visibility import observability
+
+    targets = []
+    for b in await app.state.requests.list_queue():
+        req = b.get("request") or {}
+        ra, dec = req.get("ra_deg"), req.get("dec_deg")
+        if ra is None or dec is None:
+            continue
+        o = await asyncio.to_thread(observability, ra, dec, night, el, 30.0, 60.0)
+        count, exptime = _recipe_summary(req.get("recipe_json"))
+        targets.append({
+            "block_id": b["id"], "name": req.get("object_name") or "(target)",
+            "class_label": b.get("class_label"), "state": b.get("state"),
+            "mode": (req.get("mode")), "scheduled_utc": b.get("scheduled_utc"),
+            "n_done": b.get("n_done", 0), "total_frames": count,
+            "ra_deg": ra, "dec_deg": dec, "count": count, "exptime_s": exptime,
+            **o,
+        })
+    # kept in the queue's saved order (seq) so manual reordering sticks; the client's
+    # "Sort by best time" button re-applies the best-time order via /queue/sort.
+    return {"available": True, "timezone": loc.timezone,
+            "observable_count": sum(1 for t in targets if t["observable"]),
+            "targets": targets}
+
+
+def _best_time_key(b: dict, o: dict | None):
+    """Sort key for the best-time queue order: set-time + observable items by their
+    effective time first; non-observable items last, by descending peak altitude."""
+    sched = b.get("scheduled_utc")
+    if sched:
+        return (0, sched)
+    if o and o["observable"]:
+        return (0, o.get("best_start_utc") or o.get("window_start_utc") or o.get("max_alt_utc") or "~")
+    return (1, -(o["max_alt_deg"] if o else -99.0))
+
+
+@app.post("/api/transient/queue/sort")
+async def queue_sort():
+    """Re-apply the best-time order to the queue (persists as the new manual order)."""
+    loc = app.state.observatory.location
+    blocks = await app.state.requests.list_queue()
+    night, el = (await _night_cached()) if loc.is_set else (None, None)
+    if night is None:
+        return blocks
+    from ..transient.visibility import observability
+    keyed = []
+    for b in blocks:
+        req = b.get("request") or {}
+        ra, dec = req.get("ra_deg"), req.get("dec_deg")
+        o = (await asyncio.to_thread(observability, ra, dec, night, el, 30.0, 60.0)
+             if (ra is not None and dec is not None) else None)
+        keyed.append((_best_time_key(b, o), b["id"]))
+    keyed.sort(key=lambda x: x[0])
+    return await app.state.requests.reorder_queue([bid for _, bid in keyed])
+
+
+@app.get("/api/sky/visibility")
+async def sky_visibility(ra_hours: float, dec_deg: float):
+    """Tonight's observability for a target: the ≥30° window, the ≥60° 'best' window,
+    peak altitude, and moon separation — all within tonight's dark window."""
+    loc = app.state.observatory.location
+    if not loc.is_set:
+        raise HTTPException(400, "no site location configured")
+    night, el = await _night_cached()
+    from ..transient.visibility import observability
+    data = await asyncio.to_thread(observability, ra_hours * 15.0, dec_deg, night, el, 30.0, 60.0)
+    data["timezone"] = loc.timezone
     return data
 
 

@@ -56,6 +56,23 @@ export type GuidingTel = {
 export type GuideSample = { t: string; ra: number | null; dec: number | null; snr: number | null };
 export type GuideGraph = GuidingTel & { samples: GuideSample[] };
 
+export type Almanac = {
+  available: boolean;
+  timezone?: string | null;
+  is_dark?: boolean;
+  sun?: { alt_deg: number; sunset: string | null; sunrise: string | null };
+  twilight?: {
+    civil: { dusk: string | null; dawn: string | null };
+    nautical: { dusk: string | null; dawn: string | null };
+    astronomical: { dusk: string | null; dawn: string | null };
+  };
+  astronomical_night?: { start: string | null; end: string | null };
+  moon?: {
+    illumination: number; phase: string; emoji: string; waxing: boolean;
+    alt_deg: number; az_deg: number; up: boolean; rise: string | null; set: string | null;
+  };
+};
+
 export type PrecisionTel = {
   busy: boolean;
   enabled: boolean;
@@ -223,6 +240,7 @@ export type Plan = {
   repeat: number;
   autofocus: boolean;
   center: boolean;
+  scheduled_utc: string | null;
   source: string | null;
   last_block_id: string | null;
   last_run_at: string | null;
@@ -325,6 +343,10 @@ export type SiteInfo = {
   location: { latitude_deg?: number; longitude_deg?: number; timezone?: string };
   weather: { condition?: string | null; seeing?: string | null; humidity?: number | null; temperature?: number | null } | null;
   safety?: string | null;
+  night?: {
+    is_dark: boolean; astro_dusk: string | null; astro_dawn: string | null;
+    moon_illum: number; moon_phase: string; moon_emoji: string; timezone?: string | null;
+  } | null;
   telescopes: DashTelescope[];
   indi_connected: boolean;
 };
